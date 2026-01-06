@@ -51,7 +51,7 @@ module zeta_mul_table_tb;
 
             // Compare against Hardware Table
             if (ZETA_MUL_TABLE[i] !== converted_val) begin
-                $error("[FAIL] Index %0d: Expected %0d (Unsigned: %0d), Got %0d", 
+                $error("[FAIL] Index %0d: Expected %0d (Unsigned: %0d), Got %0d",
                         i, expected_signed[i], converted_val, ZETA_MUL_TABLE[i]);
                 errors++;
             end
