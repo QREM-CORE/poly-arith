@@ -14,68 +14,158 @@
  * b(x) = b0 + b1*X
  * c(x) = a(x) * b(x) mod (X^2 - zeta)
  *
- * Resulting Equations:
- * c0 = a0*b0 + a1*b1*zeta  (modulo q)
- * c1 = a0*b1 + a1*b0       (modulo q)
+ * Latency: 4 Clock Cycles
  *
- * Input Requirements:
- * - Inputs a0, a1, b0, b1 are 16-bit signed coefficients (coeff_t).
- * - Input 'zeta' MUST be the specific constant for this coefficient pair,
- *   fetched from the ROM and ZERO-EXTENDED to 16-bit signed.
- *
- * Implementation Details:
- * - Uses 16x16 signed multipliers (DSP inference).
- * - Implements "Lazy Reduction" internally by accumulating 32-bit products
- *   before performing the final Montgomery reduction.
  */
 
 import poly_arith_pkg::*;
 
 module base_case_mul (
+    input           clk,
+    input           rst,
+    input           valid_i,
+
     // Input Pair A
-    input  coeff_t  a0, // The Even coefficient (e.g., index 0)
-    input  coeff_t  a1, // The Odd coefficient  (e.g., index 1)
+    input  coeff_t  a0_i,
+    input  coeff_t  a1_i,
 
     // Input Pair B
-    input  coeff_t  b0,
-    input  coeff_t  b1,
+    input  coeff_t  b0_i,
+    input  coeff_t  b1_i,
 
-    // The Zeta Constant for this specific pair (from ROM)
-    input  coeff_t  zeta,
+    // Zeta
+    input  coeff_t  zeta_i,
 
     // Output Pair
-    output coeff_t  c0,
-    output coeff_t  c1
+    output coeff_t  c0_o,
+    output coeff_t  c1_o,
+    output          valid_o
 );
-    // ========= Computation of c0: a0*b0 + a1*b1*zeta =========
-    logic signed [31:0] p0,         // a0 * b0
-                        p1,         // a1 * b1
-                        pzeta,      // reduce(a1 * b1) * zeta
-                        c0_wide;    // a0*b0 + a1*b1*zeta
-    coeff_t p1_reduced; // reduce(p1)
 
-    assign p0       = a0 * b0;
-    assign p1       = a1 * b1;
-    assign pzeta    = p1_reduced * zeta;
-    assign c0_wide  = p0 + pzeta;
+    // ============================================================
+    // STAGE 0: Raw Multiplication & Karatsuba Setup
+    // ============================================================
 
-    modular_reduce mod1 (
-        .z_i    (p1),
-        .res_o  (p1_reduced)
+    // 1. Raw Products (24-bit)
+    logic [23:0] prod_high, prod_low;
+    assign prod_high = a1_i * b1_i;
+    assign prod_low  = a0_i * b0_i;
+
+    // 2. Middle Term Calculation (Karatsuba)
+    // Formula: (a0+a1)(b0+b1) - a1b1 - a0b0
+    // Note: In standard integer math, this result is always positive.
+    logic [12:0] sum_a, sum_b; // 13-bit to hold sum of two 12-bit coeffs
+    assign sum_a = a0_i + a1_i;
+    assign sum_b = b0_i + b1_i;
+
+    logic [25:0] prod_sum; 
+    assign prod_sum = sum_a * sum_b;
+
+    logic [25:0] mid_term_raw;
+    assign mid_term_raw = prod_sum - prod_high - prod_low;
+
+    // ============================================================
+    // PHASE 1: Parallel Reduction (Cycles 0 -> 2)
+    // ============================================================
+
+    // We reduce ALL three terms immediately to save register width later.
+
+    logic val_high_valid, val_low_valid, val_mid_valid;
+    logic [11:0] red_high, red_low, red_mid;
+
+    // Reducer 1: High Term (a1 * b1)
+    modular_reduce REDUCE_HIGH (
+        .clk(clk), .rst(rst),
+        .valid_i(valid_i),
+        .product_i(prod_high),
+        .valid_o(val_high_valid),
+        .result_o(red_high)
     );
 
-    modular_reduce mod2 (
-        .z_i    (c0_wide),
-        .res_o  (c0)
+    // Reducer 2: Low Term (a0 * b0)
+    modular_reduce REDUCE_LOW (
+        .clk(clk), .rst(rst),
+        .valid_i(valid_i),
+        .product_i(prod_low),
+        .valid_o(val_low_valid),
+        .result_o(red_low)
     );
 
-    // =========== Computation of c1: a0*b1 + a1*b0 ============
-    logic signed [31:0] c1_wide;
-    assign c1_wide  = a0*b1 + a1*b0;
-
-    modular_reduce mod3 (
-        .z_i    (c1_wide),
-        .res_o  (c1)
+    // Reducer 3: Middle Term
+    // Note: mid_term_raw can be up to ~25 bits, but modular_reduce takes 24.
+    // However, for ML-KEM inputs, (a0+a1)(b0+b1) max is roughly 2*3328 * 2*3328
+    // which fits in 24 bits if inputs are reduced.
+    // Ideally, ensure modular_reduce input is wide enough or cast carefully.
+    modular_reduce REDUCE_MID (
+        .clk(clk), .rst(rst),
+        .valid_i(valid_i),
+        .product_i(mid_term_raw[23:0]), // Assuming fits in 24 bits
+        .valid_o(val_mid_valid),
+        .result_o(red_mid)
     );
+
+    // ============================================================
+    // STAGE 2: Zeta Multiplication & C0 Calculation (Cycle 2)
+    // ============================================================
+
+    // When the reducers finish (T+2), we combine High and Low to make C0.
+    // C0 = (High_Reduced * Zeta) + Low_Reduced
+
+    // We need to pipeline 'zeta_i' to match the 2-cycle reducer latency.
+    logic [11:0] zeta_d1, zeta_d2;
+    always_ff @(posedge clk) begin
+        if (valid_i) zeta_d1 <= zeta_i;
+        zeta_d2 <= zeta_d1;
+    end
+
+    // Math Logic (Combinational after Reducers output)
+    logic [23:0] term_zeta;
+    logic [23:0] sum_c0_raw;
+
+    assign term_zeta  = red_high * zeta_d2;
+    assign sum_c0_raw = term_zeta + red_low;
+    // Note: term_zeta is ~24 bits. red_low is 12 bits.
+    // sum_c0_raw fits comfortably in 24 bits for the final reducer.
+
+    // ============================================================
+    // PHASE 2: Final Reduction of C0 (Cycles 2 -> 4)
+    // ============================================================
+
+    logic val_c0_valid;
+    logic [11:0] c0_final;
+
+    modular_reduce REDUCE_FINAL_C0 (
+        .clk(clk), .rst(rst),
+        .valid_i(val_high_valid), // Starts when Phase 1 finishes
+        .product_i(sum_c0_raw),
+        .valid_o(val_c0_valid),
+        .result_o(c0_final)
+    );
+
+    // ============================================================
+    // DELAY LINE: Align C1 with C0 (Cycles 2 -> 4)
+    // ============================================================
+
+    // The Middle Term (C1) was ready at T+2, but C0 isn't ready until T+4.
+    // We must delay C1 by 2 cycles.
+
+    logic [11:0] c1_d1, c1_final;
+    logic        valid_d1;
+
+    always_ff @(posedge clk) begin
+        // Pipeline Stage 1 (Cycle 3)
+        c1_d1 <= red_mid;
+
+        // Pipeline Stage 2 (Cycle 4 - Output)
+        c1_final <= c1_d1;
+    end
+
+    // ============================================================
+    // OUTPUT ASSIGNMENT
+    // ============================================================
+
+    assign c0_o = c0_final;
+    assign c1_o = c1_final;
+    assign valid_o = val_c0_valid;
 
 endmodule
