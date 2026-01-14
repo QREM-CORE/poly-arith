@@ -1,7 +1,7 @@
 // ==========================================================
 // Testbench for Base Case Multiplier (Enhanced Debugging)
 // Author: Kiet Le
-// Target: FIPS 203 (ML-KEM) - 4-Cycle Latency
+// Target: FIPS 203 (ML-KEM) - 2-Cycle Latency
 // ==========================================================
 `timescale 1ns/1ps
 
@@ -89,14 +89,14 @@ module base_case_mul_tb();
         // 1. Compute C0 = (a0*b0 + a1*b1*zeta) % Q
         term_a0b0 = in_a0 * in_b0;
         term_a1b1 = in_a1 * in_b1;
-        
+
         c0_full = term_a0b0 + (term_a1b1 * in_zeta);
         res.c0  = c0_full % 3329;
 
         // 2. Compute C1 = (a0*b1 + a1*b0) % Q
         term_a0b1 = in_a0 * in_b1;
         term_a1b0 = in_a1 * in_b0;
-        
+
         c1_full = term_a0b1 + term_a1b0;
         res.c1  = c1_full % 3329;
 
@@ -133,20 +133,20 @@ module base_case_mul_tb();
     always @(posedge clk) begin
         if (valid_o) begin
             expected_t exp_pop;
-            
+
             if (expected_queue.size() == 0) begin
                 $error("[FAIL] Unexpected valid_o! Queue is empty.");
                 error_count++;
             end else begin
                 exp_pop = expected_queue.pop_front();
-                
+
                 if (c0 !== exp_pop.c0 || c1 !== exp_pop.c1) begin
                     $error("==================================================");
                     $error("[FAIL] Test Case: %s", exp_pop.test_name);
                     $error("--------------------------------------------------");
-                    $error("INPUTS: A={%0d, %0d} | B={%0d, %0d} | Zeta=%0d", 
-                            exp_pop.orig_a0, exp_pop.orig_a1, 
-                            exp_pop.orig_b0, exp_pop.orig_b1, 
+                    $error("INPUTS: A={%0d, %0d} | B={%0d, %0d} | Zeta=%0d",
+                            exp_pop.orig_a0, exp_pop.orig_a1,
+                            exp_pop.orig_b0, exp_pop.orig_b1,
                             exp_pop.orig_zeta);
                     $error("EXPECTED: C0=%0d, C1=%0d", exp_pop.c0, exp_pop.c1);
                     $error("RECEIVED: C0=%0d, C1=%0d", c0, c1);
@@ -193,22 +193,50 @@ module base_case_mul_tb();
         drive_input(0,1,0,1, 50, "Test 3: X*X = Zeta");
 
         // -------------------------
-        // Test 4: Pipeline Stress (Random)
+        // Test 4: Maximum Coefficients (The "Karatsuba Stress Test")
         // -------------------------
-        // $display("Stress Testing Pipeline...");
-        
-        // for (int i=0; i < 20; i++) begin
-        //     string test_id;
-        //     // Create a unique name for this iteration: "Random #0", "Random #1", etc.
-        //     $sformat(test_id, "Random #%0d", i);
+        // Inputs = 3328 (Max valid value).
+        // This forces the Middle Term sum to ~44 million, testing the 26-bit expansion.
+        drive_input(3328, 3328, 3328, 3328, 1, "Test 4: Max Coeffs");
 
-        //     drive_input(
-        //         $urandom_range(0, 3328), $urandom_range(0, 3328),
-        //         $urandom_range(0, 3328), $urandom_range(0, 3328),
-        //         $urandom_range(0, 3328),
-        //         test_id
-        //     );
-        // end
+        // -------------------------
+        // Test 5: Maximum Zeta
+        // -------------------------
+        // This stresses the C0 calculation: (a1*b1*zeta)
+        // We want to make sure the multiplication by a large Zeta doesn't overflow or glitch.
+        drive_input(100, 3328, 100, 3328, 3328, "Test 5: Max Zeta");
+
+        // -------------------------
+        // Test 6: The "Cross-Term" Stress
+        // -------------------------
+        // We want to generate a huge C1 result (a0*b1 + a1*b0)
+        // Set a0=Max, b1=Max, a1=Max, b0=Max.
+        // This specifically targets the logic: P_sum - P_high - P_low
+        drive_input(3328, 3328, 3328, 3328, 10, "Test 6: Cross Term Stress");
+
+        // -------------------------
+        // Test 7: The "Wrap Around" (Modulo Boundary)
+        // -------------------------
+        // Inputs that are exactly Q-1. The result usually wraps close to 0 or Q.
+        drive_input(3328, 1, 1, 3328, 17, "Test 7: Boundary Wrap");
+
+        // -------------------------
+        // Test 8: Pipeline Stress (Random)
+        // -------------------------
+        $display("Stress Testing Pipeline...");
+
+        for (int i=0; i < 10000; i++) begin
+            string test_id;
+            // Create a unique name for this iteration: "Random #0", "Random #1", etc.
+            $sformat(test_id, "Random #%0d", i);
+
+            drive_input(
+                $urandom_range(0, 3328), $urandom_range(0, 3328),
+                $urandom_range(0, 3328), $urandom_range(0, 3328),
+                $urandom_range(0, 3328),
+                test_id
+            );
+        end
 
         // Stop Driving
         @(posedge clk);
