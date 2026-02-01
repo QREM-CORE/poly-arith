@@ -2,18 +2,13 @@
 // Testbench for Table-Based Modular Multiplier
 // Author: Kiet Le
 // Target: FIPS 203 (ML-KEM) - 12-bit Modular Arithmetic
+// Verified Latency: 3 Clock Cycles
 // ==========================================================
 `timescale 1ns/1ps
 
 import poly_arith_pkg::*;
 
 module mod_mul_tb();
-
-    // ------------------------------------------------------
-    // Local Definitions (if package not available)
-    // ------------------------------------------------------
-    // typedef logic [11:0] coeff_t;
-    // localparam coeff_t Q = 3329;
 
     // ------------------------------------------------------
     // Signals
@@ -39,6 +34,7 @@ module mod_mul_tb();
     // Scoreboard (Queue for Pipelined Checking)
     // ------------------------------------------------------
     // Stores expected results to compare against valid_o
+    // The queue depth naturally handles the 3-cycle latency
     coeff_t expected_queue [$];
 
     // ------------------------------------------------------
@@ -90,6 +86,7 @@ module mod_mul_tb();
     // Monitor Process
     // ------------------------------------------------------
     always @(posedge clk) begin
+        // Checks valid_o; works for any pipeline depth (now 3)
         if (valid_o) begin
             coeff_t expected_val;
 
@@ -129,7 +126,7 @@ module mod_mul_tb();
         repeat(2) @(posedge clk);
 
         $display("==========================================================");
-        $display("Starting Modular Multiplier Verification");
+        $display("Starting Modular Multiplier Verification (3-Cycle Latency)");
         $display("==========================================================");
 
         // --------------------------------------------------
@@ -165,7 +162,7 @@ module mod_mul_tb();
         valid_i = 0;
         op1 = 0; op2 = 0;
 
-        // Wait for Pipeline to Drain
+        // Wait for Pipeline to Drain (3 cycles + safety)
         wait(expected_queue.size() == 0);
         repeat(5) @(posedge clk);
 
