@@ -1,3 +1,10 @@
+// ==========================================================
+// Testbench for Base Case Multiplier (Enhanced Debugging)
+// Author: Jessica Buentipo
+// Target: FIPS 203 (ML-KEM) - 2-Cycle Latency
+// ==========================================================
+
+
 `timescale 1ns/1ps
 
 module mod_add_tb();
