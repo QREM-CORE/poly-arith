@@ -9,7 +9,6 @@
 module mod_sub_tb();
 
     import poly_arith_pkg::*;
-    
     logic        clk;
     logic        rst;
     coeff_t      op1_i;
@@ -41,7 +40,7 @@ module mod_sub_tb();
             op1_i   <= a;
             op2_i   <= b;
             valid_i <= 1'b1;
-            
+
             // Golden Model Logic for Subtraction
             diff = $signed({1'b0, a}) - $signed({1'b0, b});
             if (diff < 0) begin
@@ -49,9 +48,9 @@ module mod_sub_tb();
             end else begin
                 expected_val = coeff_t'(diff);
             end
-            
+
             expected_q.push_back(expected_val); // Store for later checking
-            
+
             @(posedge clk);
             valid_i <= 1'b0;
         end
@@ -91,7 +90,7 @@ module mod_sub_tb();
 
         // --- Test Cases ---
         $display("--- Starting Subtraction Tests ---");
-        
+
         send_sub(12'd50, 12'd20);      // Simple positive result: 30
         send_sub(12'd20, 12'd50);      // Underflow: 20 - 50 = -30 -> (-30 + 3329) = 3299
         send_sub(12'd0, 12'd1);        // Smallest underflow: -1 -> 3328
@@ -99,7 +98,7 @@ module mod_sub_tb();
         send_sub(12'd100, 12'd100);    // Zero case
         send_sub(12'd0, 12'd3328);     // Max underflow: -3328 -> 1
         send_sub(12'd1664, 12'd1665);  // Mid-range underflow
-        
+
         // Random testing (optional)
         repeat(5) begin
             send_sub($urandom_range(0, Q-1), $urandom_range(0, Q-1));
@@ -107,11 +106,11 @@ module mod_sub_tb();
 
         // Wait for pipeline to drain (2 stages in your module)
         repeat (5) @(posedge clk);
-        
+
         $display("\n--- FINAL REPORT ---");
         $display("Tests Passed: %0d", pass_count);
         $display("Tests Failed: %0d", fail_count);
-        
+
         if (fail_count == 0 && pass_count > 0)
             $display("SIMULATION RESULT: SUCCESS\n");
         else

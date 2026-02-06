@@ -1,19 +1,19 @@
 /*
- * Module Name: mod_add
- * Author(s): Jessica Buentipo
- * Target: FIPS 203 (ML-KEM / Kyber)
- *
- * Description:
- * Performs Modular Addition: (A + B) mod 3329.
- * Implements a single-stage conditional subtraction reduction. Since the
- * maximum sum of two coefficients (0 to 3328) is 6656, a single subtraction
- * of the modulus Q (3329) is sufficient for reduction.
- *
- * Latency: 2 Clock Cycles
- * - Cycle 0: Input Registration (Pipeline Stage 1)
- * - Cycle 1: Combinational Addition, Modular Reduction, and Output 
- * Registration (Pipeline Stage 2)
- */
+* Module Name: mod_add
+* Author(s): Jessica Buentipo
+* Target: FIPS 203 (ML-KEM / Kyber)
+*
+* Description:
+* Performs Modular Addition: (A + B) mod 3329.
+* Implements a single-stage conditional subtraction reduction. Since the
+* maximum sum of two coefficients (0 to 3328) is 6656, a single subtraction
+* of the modulus Q (3329) is sufficient for reduction.
+*
+* Latency: 2 Clock Cycles
+* - Cycle 0: Input Registration (Pipeline Stage 1)
+* - Cycle 1: Combinational Addition, Modular Reduction, and Output
+* Registration (Pipeline Stage 2)
+*/
 
 import poly_arith_pkg::*;
 

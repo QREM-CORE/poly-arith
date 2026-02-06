@@ -1,26 +1,27 @@
 /*
- * Module Name: mod_sub
- * Author(s): Jessica Buentipo (Modified for Subtraction)
- * Target: FIPS 203 (ML-KEM / Kyber)
- *
- * Description:
- * Performs Modular Subtraction: (A - B) mod 3329.
- * Implements a single-stage conditional addition reduction. If the result 
- * of (A - B) is negative (indicated by the MSB of the 13-bit difference), 
- * the modulus Q (3329) is added to bring the result back into the 
- * positive range [0, 3328].
- *
- * Latency: 2 Clock Cycles
- * - Cycle 0: Input Registration (Pipeline Stage 1)
- * - Cycle 1: Combinational Subtraction, Modular Correction, and Output 
- * Registration (Pipeline Stage 2)
- */
+* Module Name: mod_sub
+* Author(s): Jessica Buentipo (Modified for Subtraction)
+* Target: FIPS 203 (ML-KEM / Kyber)
+*
+* Description:
+* Performs Modular Subtraction: (A - B) mod 3329.
+* Implements a single-stage conditional addition reduction. If the result
+* of (A - B) is negative (indicated by the MSB of the 13-bit difference),
+* the modulus Q (3329) is added to bring the result back into the
+* positive range [0, 3328].
+*
+* Latency: 2 Clock Cycles
+* - Cycle 0: Input Registration (Pipeline Stage 1)
+* - Cycle 1: Combinational Subtraction, Modular Correction, and Output
+* Registration (Pipeline Stage 2)
+*/
 
 /*
- * Module Name: mod_sub
- * Author(s): Jessica Buentipo (Modified for Subtraction)
- * Target: FIPS 203 (ML-KEM / Kyber)
- */
+* Module Name: mod_sub
+* Author(s): Jessica Buentipo (Modified for Subtraction)
+* Target: FIPS 203 (ML-KEM / Kyber)
+*/
+
 import poly_arith_pkg::*;
 
 module mod_sub(

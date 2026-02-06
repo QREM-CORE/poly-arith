@@ -10,7 +10,7 @@
 module mod_add_tb();
 
     import poly_arith_pkg::*;
-    
+
     logic        clk;
     logic        rst;
     coeff_t      op1_i;
@@ -41,12 +41,12 @@ module mod_add_tb();
             op1_i   <= a;
             op2_i   <= b;
             valid_i <= 1'b1;
-            
+
             // Golden Model Logic
             local_sum = a + b;
             expected_val = (local_sum >= Q) ? (local_sum - Q) : local_sum;
             expected_q.push_back(expected_val); // Store for later checking
-            
+
             @(posedge clk);
             valid_i <= 1'b0;
         end
@@ -92,11 +92,11 @@ module mod_add_tb();
 
         // Wait for pipeline to drain
         repeat (5) @(posedge clk);
-        
+
         $display("\n--- FINAL REPORT ---");
         $display("Tests Passed: %0d", pass_count);
         $display("Tests Failed: %0d", fail_count);
-        
+
         if (fail_count == 0 && pass_count > 0)
             $display("SIMULATION RESULT: SUCCESS\n");
         else
