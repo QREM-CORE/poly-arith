@@ -16,12 +16,6 @@
 * Registration (Pipeline Stage 2)
 */
 
-/*
-* Module Name: mod_sub
-* Author(s): Jessica Buentipo (Modified for Subtraction)
-* Target: FIPS 203 (ML-KEM / Kyber)
-*/
-
 import poly_arith_pkg::*;
 
 module mod_sub(
