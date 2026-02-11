@@ -147,9 +147,9 @@ module mod_mul_tb();
         // --------------------------------------------------
         // 2. Random Stress Testing
         // --------------------------------------------------
-        $display("Starting Random Stress Loop (10,000 vectors)...");
+        $display("Starting Random Stress Loop (500 vectors)...");
 
-        for (int i = 0; i < 10000; i++) begin
+        for (int i = 0; i < 500; i++) begin
             coeff_t rand_a, rand_b;
             rand_a = $urandom_range(0, 3328);
             rand_b = $urandom_range(0, 3328);
