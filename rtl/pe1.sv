@@ -1,6 +1,6 @@
 /*
  * Module Name: pe1 (Processing Element 1)
- * Author(s): Jessica Buentipo
+ * Author(s): Jessica Buentipo, Kiet Le
  * Target: FIPS 203 (ML-KEM / Kyber) Hardware Accelerator
  *
  * Reference:
@@ -12,7 +12,7 @@
 
 import poly_arith_pkg::*;
 
-module pe0 (
+module pe1 (
     input   logic           clk,
     input   logic           rst,
 
