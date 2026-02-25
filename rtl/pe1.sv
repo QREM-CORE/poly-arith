@@ -104,7 +104,10 @@ module pe1 (
         .data_o(delay_4_valid_data_o)
     );
     // Gate input: Only enter pipe during 4-cycle modes
-    assign delay_4_valid_data_i = (ctrl_i == PE_MODE_NTT || ctrl_i == PE_MODE_INTT || ctrl_i == PE_MODE_CWM) ? valid_i : 1'b0;
+    assign delay_4_valid_data_i = ( ctrl_i == PE_MODE_NTT ||
+                                    ctrl_i == PE_MODE_INTT ||
+                                    ctrl_i == PE_MODE_CWM)
+                                    ? valid_i : 1'b0;
 
     // -------- Delay 3 U1 Input Register --------
     // For Co/Deco Modes (3-cycle latency)
