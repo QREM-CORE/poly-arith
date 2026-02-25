@@ -137,8 +137,8 @@ module pe2 (
         .data_o(delay_3_valid_data_o)
     );
     assign delay_3_valid_data_i = ( ctrl_i == PE_MODE_CWM     ||
-                                    ctrl_i == PE_MODE_CODECO1 ||
-                                    ctrl_i == PE_MODE_CODECO2 )
+                                    ctrl_i == PE_MODE_COMP ||
+                                    ctrl_i == PE_MODE_DECOMP )
                                     ? valid_i : 1'b0;
 
     // 1-Cycle Pipeline (ADDSUB)
@@ -278,7 +278,7 @@ module pe2 (
     always_comb begin
         if (ctrl_i == PE_MODE_ADDSUB) begin
             valid_o = delay_1_valid_data_o;
-        end else if (ctrl_i == PE_MODE_CWM || ctrl_i == PE_MODE_CODECO1 || ctrl_i == PE_MODE_CODECO2) begin
+        end else if (ctrl_i == PE_MODE_CWM || ctrl_i == PE_MODE_COMP || ctrl_i == PE_MODE_DECOMP) begin
             valid_o = delay_3_valid_data_o;
         end else begin
             valid_o = delay_4_valid_data_o;

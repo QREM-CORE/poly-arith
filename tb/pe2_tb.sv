@@ -142,7 +142,7 @@ module pe2_tb();
             exp_uv.u = mod_add(a, b);
             exp_uv.v = mod_sub(a, b);
         end
-        else if (mode == PE_MODE_CODECO1 || mode == PE_MODE_CODECO2) begin
+        else if (mode == PE_MODE_COMP || mode == PE_MODE_DECOMP) begin
             exp_uv.u = mod_mul(a, w1);
             exp_uv.v = mod_mul(b, w2);
         end
@@ -295,9 +295,9 @@ module pe2_tb();
         // Pipelined Stream: Co/Deco Mode
         // --------------------------------------------------
         $display("--- Testing Streaming Compression (Co/Deco) Mode ---");
-        drive_pipeline(0, 0, 0, 0, PE_MODE_CODECO1, "CODECO: All Zeros");
-        drive_pipeline(1234, 500, 10, 5, PE_MODE_CODECO1, "CODECO: Simple Standard");
-        drive_pipeline(3328, 3328, 3328, 3328, PE_MODE_CODECO1, "CODECO: Max Values");
+        drive_pipeline(0, 0, 0, 0, PE_MODE_COMP, "CODECO: All Zeros");
+        drive_pipeline(1234, 500, 10, 5, PE_MODE_COMP, "CODECO: Simple Standard");
+        drive_pipeline(3328, 3328, 3328, 3328, PE_MODE_COMP, "CODECO: Max Values");
         flush_pipeline();
 
         // --------------------------------------------------
@@ -316,13 +316,14 @@ module pe2_tb();
             rw1 = $urandom_range(0, 3328);
             rw2 = $urandom_range(0, 3328);
 
-            mode_sel = $urandom_range(0, 4);
+            mode_sel = $urandom_range(0, 5);
             case(mode_sel)
                 0: rmode = PE_MODE_NTT;
                 1: rmode = PE_MODE_INTT;
                 2: rmode = PE_MODE_CWM;
                 3: rmode = PE_MODE_ADDSUB;
-                4: rmode = PE_MODE_CODECO1;
+                4: rmode = PE_MODE_COMP;
+                5: rmode = PE_MODE_DECOMP;
             endcase
 
             if (rmode != current_mode) begin
