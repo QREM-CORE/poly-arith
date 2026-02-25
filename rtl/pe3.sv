@@ -145,7 +145,9 @@ module pe3 (
         .data_o(delay_4_valid_data_o)
     );
     // Gate input: Only enter pipe during 4-cycle modes
-    assign delay_4_valid_data_i = (ctrl_i == PE_MODE_NTT || ctrl_i == PE_MODE_INTT || ctrl_i == PE_MODE_CWM) ? valid_i : 1'b0;
+    assign delay_4_valid_data_i = ( ctrl_i == PE_MODE_NTT ||
+                                    ctrl_i == PE_MODE_INTT ||
+                                    ctrl_i == PE_MODE_CWM) ? valid_i : 1'b0;
 
     // -------- Delay 3 Valid Propagation Register --------
     // For Co/Deco Modes (3-cycle latency)
@@ -160,7 +162,8 @@ module pe3 (
         .data_o(delay_3_valid_data_o)
     );
     // Gate input: Only enter pipe during 3-cycle modes
-    assign delay_3_valid_data_i = (ctrl_i == PE_MODE_COMP || ctrl_i == PE_MODE_DECOMP) ? valid_i : 1'b0;
+    assign delay_3_valid_data_i = ( ctrl_i == PE_MODE_COMP ||
+                                    ctrl_i == PE_MODE_DECOMP) ? valid_i : 1'b0;
 
     // -------- Delay 1 Valid Propagation Register --------
     // For ADD/SUB Modes (1-cycle latency)
