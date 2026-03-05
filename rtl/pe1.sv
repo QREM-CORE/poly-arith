@@ -8,6 +8,33 @@
  * H. Jung, Q. D. Truong and H. Lee, "Highly-Efficient Hardware Architecture
  * for ML-KEM PQC Standard," in IEEE Open Journal of Circuits and Systems, 2025,
  * doi: 10.1109/OJCAS.2025.3591136. (Inha University)
+ *
+ * Description:
+ * Processing Element 1 (PE1) acts as the complementary arithmetic unit to PE0
+ * in the Unified Polynomial Arithmetic Module (UniPAM). Unlike the other PEs,
+ * PE1 does not contain any modular multipliers. Instead, it features a modular
+ * adder and a unified modular adder/subtractor to handle complex addition
+ * cross-terms required in higher-radix butterflies and Karatsuba multiplication.
+ *
+ * To synchronize with the multiplier-heavy PEs, PE1 includes a 3-cycle delay
+ * register array (`delay_3`) that pads its operations to match the 4-cycle
+ * global latency of the NTT/INTT/CWM modes.
+ *
+ * Important Usage Note:
+ * The `ctrl_i` mode select signal is combinational to all internal MUXes. The Top-Level
+ * AU Controller MUST hold `ctrl_i` steady for the entire duration of an operation and
+ * insert a pipeline flush (wait for `valid_o` to clear) before switching to a new mode
+ * to prevent structural hazards (Ghost Pulses).
+ *
+ * Supported Modes & Latency:
+ * | Mode (ctrl_i)    | Operation                  | Latency |
+ * |------------------|----------------------------|---------|
+ * | PE_MODE_NTT      | Number Theoretic Transform | 4 CCs   |
+ * | PE_MODE_INTT     | Inverse NTT                | 4 CCs   |
+ * | PE_MODE_CWM      | Coordinate-Wise Mult       | 4 CCs   |
+ * | PE_MODE_COMP     | Compression                | 4 CCs   |
+ * | PE_MODE_DECOMP   | Decompression              | 1 CC    |
+ * | PE_MODE_ADDSUB   | Point-wise Add/Sub         | 1 CC    |
  */
 
 import poly_arith_pkg::*;
@@ -35,67 +62,34 @@ module pe1 (
     // Logic Instantiations
     // =========================================================================
 
-
     // ============= Delay Register Wires =============
 
-    // IDK HOW MANY PROPAGATION CYCLES I NEED TBH
-    // -------- Delay 4 Valid Propagation Register --------
-    logic   delay_4_valid_data_i;
-    logic   delay_4_valid_data_o;
+    // -------- Valid Propagation Registers --------
+    logic delay_4_valid_data_i, delay_4_valid_data_o;
+    logic delay_1_valid_data_i, delay_1_valid_data_o;
 
-    // -------- Delay 3 Valid Propagation Register --------
-    logic   delay_3_valid_data_i;
-    logic   delay_3_valid_data_o;
+    // -------- Stage 1 Output Registers --------
+    coeff_t delay_1_add_data_i, delay_1_add_data_o;
+    coeff_t delay_1_uni_add_sub_data_i, delay_1_uni_add_sub_data_o;
 
-
-    // -------- Delay 1 Valid Propagation Register --------
-    logic   delay_1_valid_data_i;
-    logic   delay_1_valid_data_o;
-
-    // -------- Delay 1 Addition Output Register --------
-    coeff_t delay_1_add_data_i;
-    coeff_t delay_1_add_data_o;
-
-    // -------- Delay 1 Unified Add/Sub Output Register --------
-    coeff_t delay_1_uni_add_sub_data_i;
-    coeff_t delay_1_uni_add_sub_data_o;
-
-    // -------- Delay 3 U1 Input Register Logic --------
-    coeff_t delay_3_u1_data_i;
-    coeff_t delay_3_u1_data_o;
-
-    // -------- Delay 3 V1 Input Register Logic --------
-    coeff_t delay_3_v1_data_i;
-    coeff_t delay_3_v1_data_o;
+    // -------- Stage 2 Padding Registers --------
+    coeff_t delay_3_u1_data_i, delay_3_u1_data_o;
+    coeff_t delay_3_v1_data_i, delay_3_v1_data_o;
 
     // ============= Arithmetic Module Wires =============
-    // -------- Modular Adder Logic --------
-    // Inputs
-    coeff_t mod_add_op1_i;
-    coeff_t mod_add_op2_i;
-    // Outputs
-    coeff_t mod_add_result_o;
-
-    // -------- Modular Divider2 Logic --------
-    coeff_t mod_div_by_2_op_i;
-    coeff_t mod_div_by_2_op_o;
-
-    // -------- Modular Uni Add/Sub Logic --------
-    coeff_t mod_uni_add_sub_op1_i;
-    coeff_t mod_uni_add_sub_op2_i;
-    wire mod_uni_add_sub_is_sub_i;
-    // Outputs
-    coeff_t mod_uni_add_sub_result_o;
+    coeff_t mod_add_op1_i, mod_add_op2_i, mod_add_result_o;
+    coeff_t mod_div_by_2_op_i, mod_div_by_2_op_o;
+    coeff_t mod_uni_add_sub_op1_i, mod_uni_add_sub_op2_i, mod_uni_add_sub_result_o;
+    logic   mod_uni_add_sub_is_sub_i;
 
     // =========================================================================
     // Delay Register Instantiations
     // =========================================================================
 
-    // -------- Delay 4 Valid Propagation Register --------
-    // For NTT, INTT, and CWM Modes (4-cycle latency)
+    // -------- 4-Cycle Valid Propagation Register --------
     delay_n #(
-        .DWIDTH (1),
-        .DEPTH  (4)
+        .DWIDTH(1),
+        .DEPTH(4)
     ) u_delay_4_valid (
         .clk(clk),
         .rst(rst),
@@ -103,49 +97,27 @@ module pe1 (
         .data_i(delay_4_valid_data_i),
         .data_o(delay_4_valid_data_o)
     );
-    // Gate input: Only enter pipe during 4-cycle modes
-    assign delay_4_valid_data_i = ( ctrl_i == PE_MODE_NTT ||
-                                    ctrl_i == PE_MODE_INTT ||
-                                    ctrl_i == PE_MODE_CWM)
-                                    ? valid_i : 1'b0;
+    // Latency is strictly determined by ctrl_i[3]
+    assign delay_4_valid_data_i = (ctrl_i[3] == 1'b1) ? valid_i : 1'b0;
 
-    // -------- Delay 3 U1 Input Register --------
-    // For Co/Deco Modes (3-cycle latency)
+    // -------- 1-Cycle Valid Propagation Register --------
     delay_n #(
-        .DWIDTH (1),
-        .DEPTH  (3)
-    ) u_delay_3_valid (
+        .DWIDTH(1),
+        .DEPTH(1)
+    ) u_delay_1_valid (
         .clk(clk),
         .rst(rst),
 
-        .data_i(delay_3_u1_data_i),
-        .data_o(delay_3_u1_data_o)
+        .data_i(delay_1_valid_data_i),
+        .data_o(delay_1_valid_data_o)
     );
-    // Gate input: Only enter pipe during 3-cycle modes
-    // -------- Delay 3 U1 Input Register Logic --------
-    assign delay_3_u1_data_i = ctrl_i[2] ? mod_div_by_2_op_o : delay_1_add_data_o;
-
-    // -------- Delay 3 V1 Input Register --------
-    // For Co/Deco Modes (3-cycle latency)
-    delay_n #(
-        .DWIDTH (1),
-        .DEPTH  (3)
-    ) u_delay_3_valid (
-        .clk(clk),
-        .rst(rst),
-
-        .data_i(delay_3_v1_data_i),
-        .data_o(delay_3_v1_data_o)
-    );
-    //
-    assign delay_3_v1_data_i = delay_1_uni_add_sub_data_o;
-    // Gate input: Only enter pipe during 3-cycle modes
-    // -------- Delay 3 V1 Input Register Logic --------
+    // Latency is strictly determined by ctrl_i[3]
+    assign delay_1_valid_data_i = (ctrl_i[3] == 1'b0) ? valid_i : 1'b0;
 
     // -------- Delay 1 Addition Output Register --------
     delay_n #(
-        .DWIDTH (COEFF_WIDTH), // 12-bit
-        .DEPTH  (1)
+        .DWIDTH(COEFF_WIDTH),
+        .DEPTH(1)
     ) u_delay_1_add (
         .clk(clk),
         .rst(rst),
@@ -156,9 +128,9 @@ module pe1 (
     assign delay_1_add_data_i = mod_add_result_o;
 
     // -------- Delay 1 Unified Add/Sub Output Register --------
-    mod_uni_add_sub #(
-        .DWIDTH (COEFF_WIDTH), // 12-bit
-        .DEPTH  (1)
+    delay_n #(
+        .DWIDTH(COEFF_WIDTH),
+        .DEPTH(1)
     ) u_delay_1_uni_add_sub (
         .clk(clk),
         .rst(rst),
@@ -167,6 +139,32 @@ module pe1 (
         .data_o(delay_1_uni_add_sub_data_o)
     );
     assign delay_1_uni_add_sub_data_i = mod_uni_add_sub_result_o;
+
+    // -------- Delay 3 U1 Padding Register --------
+    delay_n #(
+        .DWIDTH(COEFF_WIDTH),
+        .DEPTH(3)
+    ) u_delay_3_u1 (
+        .clk(clk),
+        .rst(rst),
+
+        .data_i(delay_3_u1_data_i),
+        .data_o(delay_3_u1_data_o)
+    );
+    assign delay_3_u1_data_i = ctrl_i[2] ? mod_div_by_2_op_o : delay_1_add_data_o;
+
+    // -------- Delay 3 V1 Padding Register --------
+    delay_n #(
+        .DWIDTH(COEFF_WIDTH),
+        .DEPTH(3)
+    ) u_delay_3_v1 (
+        .clk(clk),
+        .rst(rst),
+
+        .data_i(delay_3_v1_data_i),
+        .data_o(delay_3_v1_data_o)
+    );
+    assign delay_3_v1_data_i = delay_1_uni_add_sub_data_o;
 
     // =========================================================================
     // Arithmetic Module Instantiations
@@ -189,25 +187,32 @@ module pe1 (
     );
     assign mod_div_by_2_op_i = delay_1_add_data_o;
 
-// -------- Modular Divider2 Instantiation --------
+    // -------- Modular Unified Add/Sub Instantiation --------
     mod_uni_add_sub u_uni_add_sub(
-        // Inputs: Two 12-bit coefficients (0 to 3328)
-        .op1_i              (mod_uni_add_sub_op1_i),
-        .op2_i              (mod_uni_add_sub_op2_i),
-        .is_sub_i           (mod_uni_add_sub_is_sub_i),
-        .result_o           (mod_uni_add_sub_result_o)
+        .op1_i      (mod_uni_add_sub_op1_i),
+        .op2_i      (mod_uni_add_sub_op2_i),
+        .is_sub_i   (mod_uni_add_sub_is_sub_i),
+        .result_o   (mod_uni_add_sub_result_o)
     );
-
-    assign mod_uni_add_sub_op1_i = b1_i;
-    assign mod_uni_add_sub_op2_i = ctrl_i[1] ? a1_i : c0_i;
+    assign mod_uni_add_sub_op1_i = ctrl_i[1] ? a1_i : c0_i;
+    assign mod_uni_add_sub_op2_i = b1_i;
     assign mod_uni_add_sub_is_sub_i = ctrl_i[1];
 
     // =========================================================================
     // PE Outputs
     // =========================================================================
 
-    assign u1_o     = ctrl_i[3] ? delay_3_u1_data_o : delay_1_add_data_o;
-    assign v1_o     = ctrl_i[3] ? delay_3_v1_data_o : delay_1_uni_add_sub_data_i;
+    // Bypass routes must use registered output (_data_o)
+    assign u1_o = ctrl_i[3] ? delay_3_u1_data_o : delay_1_add_data_o;
+    assign v1_o = ctrl_i[3] ? delay_3_v1_data_o : delay_1_uni_add_sub_data_o;
 
-    // COME BACK TO VALID PROPAGATION LOGIC
+    // Output Valid MUX strictly controlled by ctrl_i[3]
+    always_comb begin
+        if (ctrl_i[3] == 1'b1) begin
+            valid_o = delay_4_valid_data_o;
+        end else begin
+            valid_o = delay_1_valid_data_o;
+        end
+    end
+
 endmodule
