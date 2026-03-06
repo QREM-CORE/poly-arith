@@ -164,7 +164,7 @@ module pe_unit (
         valid_o = pe0_valid_o; // Standardize valid_o to PE0's output
 
         case(ctrl_i)
-            PE_MODE_CWM     : begin
+            PE_MODE_CWM, default : begin
                 // External Mapping assumption for CWM:
                 // x0 = f_2i, x1 = f_2i+1
                 // y0 = g_2i, y1 = g_2i+1
@@ -198,7 +198,7 @@ module pe_unit (
                 z2_o = pe0_v0_o;      // V0
             end
 
-            PE_MODE_NTT     : begin
+            PE_MODE_NTT : begin
                 // External Mapping assumption for NTT:
                 // x0 = X_0, x1 = X_1, x2 = X_2, x3 = X_3
                 // w0 = w_2, w1 = w_1, w2 = w_3, w3 = w_4^1
@@ -230,7 +230,7 @@ module pe_unit (
                 z3_o = pe3_v3_o;      // V3
             end
 
-            PE_MODE_INTT    : begin
+            PE_MODE_INTT : begin
                 // External Mapping assumption for INTT:
                 // x0 = X_0, x1 = X_1, x2 = X_2, x3 = X_3
                 // w0 = w_2^-1, w1 = w_1^-1, w2 = w_3^-1, w3 = w_4^-1
@@ -262,7 +262,7 @@ module pe_unit (
                 z3_o = pe2_v2_o;      // V2
             end
 
-            PE_MODE_ADDSUB  : begin
+            PE_MODE_ADDSUB : begin
                 // External Mapping assumption for ADDSUB:
                 // x0 = X_0, x1 = X_1, x2 = X_2, x3 = X_3
                 // y0 = Y_0, y1 = Y_1, y2 = Y_2, y3 = Y_3
