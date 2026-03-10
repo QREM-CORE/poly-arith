@@ -331,7 +331,8 @@ module pe_unit (
 
                 // Simulation-only error catching for invalid control states
                 // synthesis translate_off
-                $error("[AU Wrapper] ERROR: Invalid pe_mode_e state received: %b", ctrl_i);
+                if ($time > 0)
+                    $error("[AU Wrapper] ERROR: Invalid pe_mode_e state received: %b", ctrl_i);
                 // synthesis translate_on
             end
         endcase
