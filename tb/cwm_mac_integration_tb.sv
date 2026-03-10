@@ -203,19 +203,19 @@ module cwm_mac_integration_tb();
         input coeff_t zeta
     );
         cwm_result_t result;
-        coeff_t p1, p2, cross;
+        coeff_t p1, p2, cross_term;
 
         // Standard BaseCaseMultiply (FIPS 203 Algorithm 12)
-        p1    = gm_mod_mul(f0, g0);               // f0 * g0
-        p2    = gm_mod_mul(f1, g1);               // f1 * g1
-        cross = gm_mod_add(gm_mod_mul(f0, g1),    // f0*g1 + f1*g0
-                            gm_mod_mul(f1, g0));
+        p1         = gm_mod_mul(f0, g0);               // f0 * g0
+        p2         = gm_mod_mul(f1, g1);               // f1 * g1
+        cross_term = gm_mod_add(gm_mod_mul(f0, g1),    // f0*g1 + f1*g0
+                                gm_mod_mul(f1, g0));
 
         result.c0 = gm_mod_add(p1, gm_mod_mul(zeta, p2)); // c0 = P1 + zeta*P2
 
         // PE0 Karatsuba outputs M - P3 = (P1+P2) - (f0+f1)*(g0+g1)
-        // which is -(f0*g1 + f1*g0) mod q = Q - cross (when cross != 0)
-        result.c1 = gm_mod_sub(12'd0, cross);     // c1 = -cross mod q
+        // which is -(f0*g1 + f1*g0) mod q = Q - cross_term (when cross_term != 0)
+        result.c1 = gm_mod_sub(12'd0, cross_term);     // c1 = -cross_term mod q
 
         return result;
     endfunction
