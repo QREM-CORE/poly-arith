@@ -105,11 +105,16 @@ module pe0_tb();
         expected_result_t exp;
         coeff_t t;
 
-        // 1. Calculate Expected Values
-        if (mode == PE_MODE_NTT || mode == PE_MODE_CWM) begin
+        // 1. Calculate Expected Values (UPDATED GOLDEN MODEL)
+        if (mode == PE_MODE_NTT) begin
             t = mod_mul(b, w);
             exp.u = mod_add(a, t);
-            exp.v = mod_sub(a, t);
+            exp.v = mod_sub(a, t); // NTT: Top - Bottom
+        end
+        else if (mode == PE_MODE_CWM) begin
+            t = mod_mul(b, w);
+            exp.u = mod_add(a, t);
+            exp.v = mod_sub(t, a); // CWM: Bottom - Top (The PE0 Fix!)
         end
         else if (mode == PE_MODE_INTT) begin
             exp.u = mod_div2(mod_add(a, b));

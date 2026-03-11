@@ -23,25 +23,33 @@ module pe_unit (
     input   logic           valid_i,
     input   pe_mode_e       ctrl_i,
 
-    // Data Operand A (X, f)
-    input   coeff_t         x0_i,
-    input   coeff_t         x1_i,
-    input   coeff_t         x2_i,
-    input   coeff_t         x3_i,
+    // ==========================================
+    // Primary Operand Bus (Fed by SRAM Bank A)
+    // ==========================================
+    // Mappings:
+    // - NTT/INTT/COMP/DECOMP : X_0, X_1, X_2, X_3
+    // - ADDSUB               : X_0, X_1, X_2, X_3
+    // - CWM                  : f_2i, f_2i+1, g_2i, g_2i+1
+    input   coeff_t         op_a0_i,
+    input   coeff_t         op_a1_i,
+    input   coeff_t         op_a2_i,
+    input   coeff_t         op_a3_i,
 
-    // Data Operand B (Y, g)
-    input   coeff_t         y0_i,
-    input   coeff_t         y1_i,
-    input   coeff_t         y2_i,
-    input   coeff_t         y3_i,
+    // ==========================================
+    // Secondary Operand Bus (Fed by SRAM Bank B OR Twiddle ROM)
+    // ==========================================
+    // Mappings:
+    // - NTT/INTT/COMP/DECOMP : w_2, w_1, w_3, w_4 (Twiddles / Constants)
+    // - ADDSUB               : Y_0, Y_1, Y_2, Y_3 (Secondary Polynomial)
+    // - CWM                  : omega, Unused, Unused, Unused
+    input   coeff_t         op_b0_i,
+    input   coeff_t         op_b1_i,
+    input   coeff_t         op_b2_i,
+    input   coeff_t         op_b3_i,
 
-    // Constants & Twiddle Factors (omega, m/q, 2^-1)
-    input   coeff_t         w0_i,
-    input   coeff_t         w1_i,
-    input   coeff_t         w2_i,
-    input   coeff_t         w3_i,
-
+    // ==========================================
     // Outputs
+    // ==========================================
     output  coeff_t         z0_o,
     output  coeff_t         z1_o,
     output  coeff_t         z2_o,
@@ -144,7 +152,8 @@ module pe_unit (
     );
 
     // =========================================================================
-    // Processing Element (PE) Routing (from Table 1 of Inha Paper)
+    // Processing Element (PE) Routing (Optimized 8-Port Interface)
+    // Reference: Table 1 (Inha University UniPAM Architecture)
     // =========================================================================
 
     always_comb begin
@@ -165,10 +174,13 @@ module pe_unit (
 
         case(ctrl_i)
             PE_MODE_CWM : begin
-                // External Mapping assumption for CWM:
-                // x0 = f_2i, x1 = f_2i+1
-                // y0 = g_2i, y1 = g_2i+1
-                // w0 = omega (w)
+                // ---------------------------------------------------------
+                // External Mapping for CWM (5 Inputs Used):
+                // op_a0_i = f_2i        op_b0_i = omega (w)
+                // op_a1_i = f_2i+1      op_b1_i = Unused
+                // op_a2_i = g_2i        op_b2_i = Unused
+                // op_a3_i = g_2i+1      op_b3_i = Unused
+                // ---------------------------------------------------------
 
                 // CE0 Routing (Feedback Heavy)
                 pe0_a0_i = pe2_m_o;   // M
@@ -176,22 +188,22 @@ module pe_unit (
                 pe0_w0_i = pe1_v1_o;  // V1
 
                 // CE1 Routing
-                pe1_a1_i = y0_i;      // g_2i
-                pe1_b1_i = x1_i;      // f_2i+1
-                // NOTE: Swapped c0 and c1 inputs for assumed table error
-                pe1_c0_i = x0_i;      // f_2i
-                pe1_c1_i = y1_i;      // g_2i+1
+                pe1_a1_i = op_a2_i;   // g_2i
+                pe1_b1_i = op_a1_i;   // f_2i+1
+                // NOTE: Swapped c0 and c1 inputs to fix theoretical CWM routing
+                pe1_c0_i = op_a0_i;   // f_2i
+                pe1_c1_i = op_a3_i;   // g_2i+1
 
                 // CE2 Routing
-                pe2_a2_i = x0_i;      // f_2i
-                pe2_b2_i = y1_i;      // g_2i+1
-                pe2_w1_i = y0_i;      // g_2i
-                pe2_w2_i = x1_i;      // f_2i+1
+                pe2_a2_i = op_a0_i;   // f_2i
+                pe2_b2_i = op_a3_i;   // g_2i+1
+                pe2_w1_i = op_a2_i;   // g_2i
+                pe2_w2_i = op_a1_i;   // f_2i+1
 
                 // CE3 Routing
                 pe3_a3_i = pe2_u2_o;  // U2
                 pe3_b3_i = pe2_v2_o;  // V2
-                pe3_w3_i = w0_i;      // omega
+                pe3_w3_i = op_b0_i;   // omega
 
                 // Outputs
                 z1_o = pe3_u3_o;      // U3
@@ -199,29 +211,33 @@ module pe_unit (
             end
 
             PE_MODE_NTT : begin
-                // External Mapping assumption for NTT:
-                // x0 = X_0, x1 = X_1, x2 = X_2, x3 = X_3
-                // w0 = w_2, w1 = w_1, w2 = w_3, w3 = w_4^1
+                // ---------------------------------------------------------
+                // External Mapping for NTT (8 Inputs Used):
+                // op_a0_i = X_0         op_b0_i = w_2
+                // op_a1_i = X_1         op_b1_i = w_1
+                // op_a2_i = X_2         op_b2_i = w_3
+                // op_a3_i = X_3         op_b3_i = w_4^1 (or single omega)
+                // ---------------------------------------------------------
 
                 // CE0 Routing
-                pe0_a0_i = x0_i;
-                pe0_b0_i = x2_i;
-                pe0_w0_i = w0_i;      // w_2
+                pe0_a0_i = op_a0_i;   // X_0
+                pe0_b0_i = op_a2_i;   // X_2
+                pe0_w0_i = op_b0_i;   // w_2
 
                 // CE1 Routing (Cross-PE Feedback)
                 pe1_a1_i = pe0_u0_o;  // U0
                 pe1_b1_i = pe2_u2_o;  // U2
 
                 // CE2 Routing
-                pe2_a2_i = x1_i;
-                pe2_b2_i = x3_i;
-                pe2_w1_i = w1_i;      // w_1
-                pe2_w2_i = w2_i;      // w_3
+                pe2_a2_i = op_a1_i;   // X_1
+                pe2_b2_i = op_a3_i;   // X_3
+                pe2_w1_i = op_b1_i;   // w_1
+                pe2_w2_i = op_b2_i;   // w_3
 
                 // CE3 Routing (Cross-PE Feedback)
                 pe3_a3_i = pe0_v0_o;  // V0
                 pe3_b3_i = pe2_v2_o;  // V2
-                pe3_tf_omega_4_i = w3_i; // w_4^1
+                pe3_tf_omega_4_i = op_b3_i; // w_4^1
 
                 // Outputs
                 z0_o = pe1_u1_o;      // U1
@@ -231,29 +247,33 @@ module pe_unit (
             end
 
             PE_MODE_INTT : begin
-                // External Mapping assumption for INTT:
-                // x0 = X_0, x1 = X_1, x2 = X_2, x3 = X_3
-                // w0 = w_2^-1, w1 = w_1^-1, w2 = w_3^-1, w3 = w_4^-1
+                // ---------------------------------------------------------
+                // External Mapping for INTT (8 Inputs Used):
+                // op_a0_i = X_0         op_b0_i = w_2^-1
+                // op_a1_i = X_1         op_b1_i = w_1^-1
+                // op_a2_i = X_2         op_b2_i = w_3^-1
+                // op_a3_i = X_3         op_b3_i = w_4^-1 (or single inv)
+                // ---------------------------------------------------------
 
                 // CE0 Routing (Cross-PE Feedback)
                 pe0_a0_i = pe3_u3_o;  // U3
                 pe0_b0_i = pe1_u1_o;  // U1
-                pe0_w0_i = w0_i;      // w_2^-1
+                pe0_w0_i = op_b0_i;   // w_2^-1
 
                 // CE1 Routing
-                pe1_a1_i = x2_i;
-                pe1_b1_i = x3_i;
+                pe1_a1_i = op_a2_i;   // X_2
+                pe1_b1_i = op_a3_i;   // X_3
 
                 // CE2 Routing (Cross-PE Feedback)
                 pe2_a2_i = pe3_v3_o;  // V3
                 pe2_b2_i = pe1_v1_o;  // V1
-                pe2_w1_i = w1_i;      // w_1^-1
-                pe2_w2_i = w2_i;      // w_3^-1
+                pe2_w1_i = op_b1_i;   // w_1^-1
+                pe2_w2_i = op_b2_i;   // w_3^-1
 
                 // CE3 Routing
-                pe3_a3_i = x0_i;
-                pe3_b3_i = x1_i;
-                pe3_tf_omega_4_i = w3_i; // w_4^-1
+                pe3_a3_i = op_a0_i;   // X_0
+                pe3_b3_i = op_a1_i;   // X_1
+                pe3_tf_omega_4_i = op_b3_i; // w_4^-1
 
                 // Outputs
                 z0_o = pe0_u0_o;      // U0
@@ -262,62 +282,67 @@ module pe_unit (
                 z3_o = pe2_v2_o;      // V2
             end
 
-            PE_MODE_ADDSUB : begin
-                // External Mapping assumption for ADDSUB:
-                // x0 = X_0, x1 = X_1, x2 = X_2, x3 = X_3
-                // y0 = Y_0, y1 = Y_1, y2 = Y_2, y3 = Y_3
+            PE_MODE_ADD, PE_MODE_SUB : begin
+                // ---------------------------------------------------------
+                // External Mapping for Point-wise ADD/SUB (8 Inputs Used):
+                // op_a0_i = X_0         op_b0_i = Y_0
+                // op_a1_i = X_1         op_b1_i = Y_1
+                // op_a2_i = X_2         op_b2_i = Y_2
+                // op_a3_i = X_3         op_b3_i = Y_3
+                // ---------------------------------------------------------
 
                 // CE0 Routing
-                pe0_a0_i = x0_i;
-                pe0_b0_i = y0_i;
+                pe0_a0_i = op_a0_i;
+                pe0_b0_i = op_b0_i;
 
-                // CE1 Routing
-                pe1_a1_i = x2_i;
-                pe1_b1_i = y2_i;
+                // CE1 Routing (Follows Table 1 mapping X2/Y2)
+                pe1_a1_i = op_a2_i;
+                pe1_b1_i = op_b2_i;
 
-                // CE2 Routing
-                pe2_a2_i = x1_i;
-                pe2_b2_i = y1_i;
+                // CE2 Routing (Follows Table 1 mapping X1/Y1)
+                pe2_a2_i = op_a1_i;
+                pe2_b2_i = op_b1_i;
 
-                // CE3 Routing
-                pe3_a3_i = x3_i;
-                pe3_b3_i = y3_i;
+                // CE3 Routing (Follows Table 1 mapping X3/Y3)
+                pe3_a3_i = op_a3_i;
+                pe3_b3_i = op_b3_i;
 
-                // ==========================================================
-                // EXPLICIT OUTPUT NOTE (ADDSUB):
-                // The ADDSUB mode computes both Addition (U pins) and
-                // Subtraction (V pins) simultaneously inside the PEs.
-                // Because this wrapper only exposes four 12-bit output ports
-                // (z0_o to z3_o), we are only mapping the Addition (U) results
-                // here. If your top-level control logic requires the
-                // subtraction results simultaneously, you will need to expand
-                // the pe_unit interface to expose the V pins directly.
-                // ==========================================================
-                z0_o = pe0_u0_o;
-                z1_o = pe1_u1_o;
-                z2_o = pe2_u2_o;
-                z3_o = pe3_u3_o;
+                // Outputs - Dynamically map U (Add) or V (Sub) to Z
+                if (ctrl_i == PE_MODE_ADD) begin
+                    z0_o = pe0_u0_o;
+                    z1_o = pe1_u1_o;
+                    z2_o = pe2_u2_o;
+                    z3_o = pe3_u3_o;
+                end else begin
+                    z0_o = pe0_v0_o;
+                    z1_o = pe1_v1_o;
+                    z2_o = pe2_v2_o;
+                    z3_o = pe3_v3_o;
+                end
             end
 
             PE_MODE_COMP, PE_MODE_DECOMP : begin
-                // External Mapping assumption for COMP / DECOMP:
-                // x0 = X_0, x1 = X_1, x2 = X_2, x3 = X_3
-                // w0 = m/q, w1 = m/q, w2 = m/q, w3 = m/q
+                // ---------------------------------------------------------
+                // External Mapping for COMP / DECOMP (8 Inputs Used):
+                // op_a0_i = X_0         op_b0_i = m/q
+                // op_a1_i = X_1         op_b1_i = m/q
+                // op_a2_i = X_2         op_b2_i = m/q
+                // op_a3_i = X_3         op_b3_i = m/q
+                // ---------------------------------------------------------
 
-                // Both Compression and Decompression share the same physical routing
                 // CE0 Routing
-                pe0_b0_i = x0_i;
-                pe0_w0_i = w0_i;      // m/q
+                pe0_b0_i = op_a0_i;   // X_0
+                pe0_w0_i = op_b0_i;   // m/q
 
                 // CE2 Routing
-                pe2_a2_i = x1_i;
-                pe2_b2_i = x2_i;
-                pe2_w1_i = w1_i;      // m/q
-                pe2_w2_i = w2_i;      // m/q
+                pe2_a2_i = op_a1_i;   // X_1
+                pe2_b2_i = op_a2_i;   // X_2
+                pe2_w1_i = op_b1_i;   // m/q
+                pe2_w2_i = op_b2_i;   // m/q
 
                 // CE3 Routing
-                pe3_b3_i = x3_i;
-                pe3_w3_i = w3_i;      // m/q
+                pe3_b3_i = op_a3_i;   // X_3
+                pe3_w3_i = op_b3_i;   // m/q
 
                 // Outputs
                 z0_o = pe0_v0_o;      // V0
@@ -328,8 +353,6 @@ module pe_unit (
 
             default : begin
                 // Safely falls back to top-level default assignments ('0)
-
-                // Simulation-only error catching for invalid control states
                 // synthesis translate_off
                 $error("[AU Wrapper] ERROR: Invalid pe_mode_e state received: %b", ctrl_i);
                 // synthesis translate_on
