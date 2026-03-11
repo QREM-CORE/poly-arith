@@ -10,8 +10,8 @@
  * doi: 10.1109/OJCAS.2025.3591136. (Inha University)
  *
  * Description:
- * Top-level wrapper for the Unified Polynomial Arithmetic Module.
- * Routes incoming data to PE0, PE1, PE2, and PE3 depending on the operational mode.
+ * Top-level wrapper for the Processing Elements.
+ * Includes pipeline synchronization delays for cascaded Twiddle Factors.
  */
 
 import poly_arith_pkg::*;
@@ -85,6 +85,37 @@ module pe_unit (
     coeff_t     pe3_u3_o, pe3_v3_o;
     pe_mode_e   pe3_ctrl_i;
     logic       pe3_valid_i, pe3_valid_o;
+
+    // =========================================================================
+    // Twiddle Factor Synchronization Delays
+    // =========================================================================
+    coeff_t op_b0_d3, op_b0_d4;
+    coeff_t op_b1_d4;
+    coeff_t op_b2_d4;
+    coeff_t op_b3_d4;
+
+    // op_b0 delays (Needs 3-cycle tap for CWM, 4-cycle tap for INTT)
+    delay_n #(.DWIDTH(12), .DEPTH(3)) u_delay_b0_3 (
+        .clk(clk), .rst(rst), .data_i(op_b0_i), .data_o(op_b0_d3)
+    );
+    delay_n #(.DWIDTH(12), .DEPTH(1)) u_delay_b0_4 (
+        .clk(clk), .rst(rst), .data_i(op_b0_d3), .data_o(op_b0_d4) // Chained
+    );
+
+    // op_b1 delay (4-cycle for INTT)
+    delay_n #(.DWIDTH(12), .DEPTH(4)) u_delay_b1_4 (
+        .clk(clk), .rst(rst), .data_i(op_b1_i), .data_o(op_b1_d4)
+    );
+
+    // op_b2 delay (4-cycle for INTT)
+    delay_n #(.DWIDTH(12), .DEPTH(4)) u_delay_b2_4 (
+        .clk(clk), .rst(rst), .data_i(op_b2_i), .data_o(op_b2_d4)
+    );
+
+    // op_b3 delay (4-cycle for NTT)
+    delay_n #(.DWIDTH(12), .DEPTH(4)) u_delay_b3_4 (
+        .clk(clk), .rst(rst), .data_i(op_b3_i), .data_o(op_b3_d4)
+    );
 
     // =========================================================================
     // Processing Element (PE) Instantiations
@@ -170,7 +201,7 @@ module pe_unit (
 
         pe0_valid_i = valid_i; pe1_valid_i = valid_i;
         pe2_valid_i = valid_i; pe3_valid_i = valid_i;
-        valid_o = pe0_valid_o; // Standardize valid_o to PE0's output
+        valid_o = pe0_valid_o;
 
         case(ctrl_i)
             PE_MODE_CWM : begin
@@ -203,7 +234,7 @@ module pe_unit (
                 // CE3 Routing
                 pe3_a3_i = pe2_u2_o;  // U2
                 pe3_b3_i = pe2_v2_o;  // V2
-                pe3_w3_i = op_b0_i;   // omega
+                pe3_w3_i = op_b0_d3;  // omega (SYNCHRONIZED: 3-Cycle Delay)
 
                 // Outputs
                 z1_o = pe3_u3_o;      // U3
@@ -222,22 +253,22 @@ module pe_unit (
                 // CE0 Routing
                 pe0_a0_i = op_a0_i;   // X_0
                 pe0_b0_i = op_a2_i;   // X_2
-                pe0_w0_i = op_b0_i;   // w_2
+                pe0_w0_i = op_b0_i;   // w_2 (No delay, Stage 1)
 
-                // CE1 Routing (Cross-PE Feedback)
+                // CE1 Routing
                 pe1_a1_i = pe0_u0_o;  // U0
                 pe1_b1_i = pe2_u2_o;  // U2
 
                 // CE2 Routing
                 pe2_a2_i = op_a1_i;   // X_1
                 pe2_b2_i = op_a3_i;   // X_3
-                pe2_w1_i = op_b1_i;   // w_1
-                pe2_w2_i = op_b2_i;   // w_3
+                pe2_w1_i = op_b1_i;   // w_1 (No delay, Stage 1)
+                pe2_w2_i = op_b2_i;   // w_3 (No delay, Stage 1)
 
-                // CE3 Routing (Cross-PE Feedback)
+                // CE3 Routing
                 pe3_a3_i = pe0_v0_o;  // V0
                 pe3_b3_i = pe2_v2_o;  // V2
-                pe3_tf_omega_4_i = op_b3_i; // w_4^1
+                pe3_tf_omega_4_i = op_b3_d4; // w_4^1 (SYNCHRONIZED: 4-Cycle Delay)
 
                 // Outputs
                 z0_o = pe1_u1_o;      // U1
@@ -258,22 +289,22 @@ module pe_unit (
                 // CE0 Routing (Cross-PE Feedback)
                 pe0_a0_i = pe3_u3_o;  // U3
                 pe0_b0_i = pe1_u1_o;  // U1
-                pe0_w0_i = op_b0_i;   // w_2^-1
+                pe0_w0_i = op_b0_d4;  // w_2^-1 (SYNCHRONIZED: 4-Cycle Delay)
 
                 // CE1 Routing
                 pe1_a1_i = op_a2_i;   // X_2
                 pe1_b1_i = op_a3_i;   // X_3
 
-                // CE2 Routing (Cross-PE Feedback)
+                // CE2 Routing
                 pe2_a2_i = pe3_v3_o;  // V3
                 pe2_b2_i = pe1_v1_o;  // V1
-                pe2_w1_i = op_b1_i;   // w_1^-1
-                pe2_w2_i = op_b2_i;   // w_3^-1
+                pe2_w1_i = op_b1_d4;  // w_1^-1 (SYNCHRONIZED: 4-Cycle Delay)
+                pe2_w2_i = op_b2_d4;  // w_3^-1 (SYNCHRONIZED: 4-Cycle Delay)
 
                 // CE3 Routing
                 pe3_a3_i = op_a0_i;   // X_0
                 pe3_b3_i = op_a1_i;   // X_1
-                pe3_tf_omega_4_i = op_b3_i; // w_4^-1
+                pe3_tf_omega_4_i = op_b3_i; // w_4^-1 (No delay, Stage 1)
 
                 // Outputs
                 z0_o = pe0_u0_o;      // U0
@@ -359,5 +390,4 @@ module pe_unit (
             end
         endcase
     end
-
 endmodule
