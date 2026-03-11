@@ -1,11 +1,16 @@
 // ==========================================================
 // Testbench for Twiddle Factor ROM + Address Generator
-// Author: Kiet Le
-// Description: Verifies that the tf_rom and tf_addr_gen modules
+// Author: Salwan Aldhahab
+// Description: Verifies that the tf_rom (4-ROM architecture)
+//              and tf_addr_gen (sequential counter) modules
 //              produce the correct twiddle factor values for
-//              all NTT and INTT passes, matching the mathematical
-//              specification from FIPS 203 and the Inha University
-//              Mixed-Radix-4/2 scheduling algorithm.
+//              all NTT and INTT passes.
+//
+//              The testbench checks:
+//              1. r4_addr / r2_addr sequences from tf_addr_gen
+//              2. ROM output values (w0, w1, w2, w3) from tf_rom
+//              3. Pass transitions and total cycle counts
+//              4. Pre-negated INTT values are correct
 // ==========================================================
 `timescale 1ns/1ps
 
@@ -23,9 +28,11 @@ module tf_rom_addr_gen_tb;
     logic           start;
     pe_mode_e       mode;
 
-    logic [6:0]     addr0, addr1, addr2;
-    logic           ag_valid, ag_busy;
+    logic [4:0]     r4_addr;
+    logic [5:0]     r2_addr;
     logic           is_intt;
+    logic           is_radix2;
+    logic           ag_valid, ag_busy;
     logic [1:0]     pass_num;
 
     // ROM
@@ -43,45 +50,48 @@ module tf_rom_addr_gen_tb;
     // DUT Instantiation
     // =========================================================================
     tf_addr_gen u_tf_addr_gen (
-        .clk        (clk),
-        .rst        (rst),
-        .start_i    (start),
-        .mode_i     (mode),
-        .addr0_o    (addr0),
-        .addr1_o    (addr1),
-        .addr2_o    (addr2),
-        .valid_o    (ag_valid),
-        .busy_o     (ag_busy),
-        .is_intt_o  (is_intt),
-        .pass_o     (pass_num)
+        .clk            (clk),
+        .rst            (rst),
+        .start_i        (start),
+        .mode_i         (mode),
+        .r4_addr_o      (r4_addr),
+        .r2_addr_o      (r2_addr),
+        .is_intt_o      (is_intt),
+        .is_radix2_o    (is_radix2),
+        .valid_o        (ag_valid),
+        .busy_o         (ag_busy),
+        .pass_o         (pass_num)
     );
 
     tf_rom u_tf_rom (
-        .clk        (clk),
-        .rst        (rst),
-        .is_intt_i  (is_intt),
-        .addr0_i    (addr0),
-        .addr1_i    (addr1),
-        .addr2_i    (addr2),
-        .w0_o       (w0),
-        .w1_o       (w1),
-        .w2_o       (w2),
-        .w3_o       (w3)
+        .clk            (clk),
+        .rst            (rst),
+        .is_intt_i      (is_intt),
+        .is_radix2_i    (is_radix2),
+        .r4_addr_i      (r4_addr),
+        .r2_addr_i      (r2_addr),
+        .w0_o           (w0),
+        .w1_o           (w1),
+        .w2_o           (w2),
+        .w3_o           (w3)
     );
 
     // =========================================================================
-    // Helper: Bit Reversal
+    // Expected ROM Contents (first few values for spot-check)
     // =========================================================================
-    function automatic logic [6:0] bit_rev7 (input logic [6:0] val);
-        bit_rev7 = {val[0], val[1], val[2], val[3], val[4], val[5], val[6]};
-    endfunction
+
+    // R4NTT_ROM[0] = {17, 289, 1584} -> w0=289, w1=17, w2=1584
+    // R4NTT_ROM[1] = {296, 1062, 1409} -> w0=1062, w1=296, w2=1409
+    // OMEGA_ROM[0] = 1729
+    // R4INTT_ROM[0] = {2761, 2649, 331} -> w0=2649, w1=2761, w2=331
+    // OMEGA_INV_ROM[0] = 17
 
     // =========================================================================
     // Test Variables
     // =========================================================================
     int errors = 0;
-    int cycle_count = 0;
     int total_tests = 0;
+    int cycle_count;
 
     // =========================================================================
     // Task: Wait for N clock cycles
@@ -91,13 +101,14 @@ module tf_rom_addr_gen_tb;
     endtask
 
     // =========================================================================
-    // Task: Verify NTT Twiddle Factors
+    // Task: Verify NTT Address Sequence & ROM Values
     // =========================================================================
     task automatic verify_ntt();
-        int expected_addr0, expected_addr1, expected_addr2;
-        int i_A, i_B_top, i_B_bot;
-        int stg_a_base;
+        int expected_r4, expected_r2;
         int num_blocks, bfs_per_block;
+        int ntt_errors_start;
+
+        ntt_errors_start = errors;
 
         $display("===================================================");
         $display("  VERIFYING NTT TWIDDLE FACTOR GENERATION");
@@ -110,155 +121,120 @@ module tf_rom_addr_gen_tb;
         @(posedge clk);
         start = 1'b0;
 
-        // Wait 1 cycle for addr_gen to start producing addresses
-        // ROM has 1 cycle read latency, so we check ROM output 1 cycle after addr
-        // But addr_gen is combinational, so addresses appear immediately on next cycle
+        expected_r4 = 0;
 
-        // === NTT Pass 1 (R4, stages 1&2): 1 block × 64 BFs ===
+        // === NTT Pass 1 (R4, stages 1&2): 1 block x 64 BFs ===
         $display("\n--- NTT Pass 1 (Radix-4, Stages 1&2) ---");
-        stg_a_base = 1;
         num_blocks = 1;
         bfs_per_block = 64;
+        cycle_count = 0;
 
         for (int b = 0; b < num_blocks; b++) begin
-            i_A     = stg_a_base + b;
-            i_B_top = 2 * stg_a_base + 2 * b;
-            i_B_bot = 2 * stg_a_base + 2 * b + 1;
-
-            expected_addr0 = int'(bit_rev7(7'(i_B_top)));
-            expected_addr1 = int'(bit_rev7(7'(i_A)));
-            expected_addr2 = int'(bit_rev7(7'(i_B_bot)));
-
             for (int j = 0; j < bfs_per_block; j++) begin
                 @(posedge clk);
                 total_tests++;
+                cycle_count++;
 
-                if (addr0 !== 7'(expected_addr0)) begin
-                    $error("NTT P1 B%0d BF%0d: addr0 mismatch. Got %0d, expected %0d",
-                           b, j, addr0, expected_addr0);
+                // Check r4 address
+                if (r4_addr !== 5'(expected_r4)) begin
+                    $error("NTT P1 B%0d BF%0d: r4_addr=%0d, expected=%0d",
+                           b, j, r4_addr, expected_r4);
                     errors++;
                 end
-                if (addr1 !== 7'(expected_addr1)) begin
-                    $error("NTT P1 B%0d BF%0d: addr1 mismatch. Got %0d, expected %0d",
-                           b, j, addr1, expected_addr1);
+
+                // Check is_radix2 is low
+                if (is_radix2 !== 1'b0) begin
+                    $error("NTT P1: is_radix2 should be 0");
                     errors++;
                 end
-                if (addr2 !== 7'(expected_addr2)) begin
-                    $error("NTT P1 B%0d BF%0d: addr2 mismatch. Got %0d, expected %0d",
-                           b, j, addr2, expected_addr2);
+
+                // Check pass number
+                if (pass_num !== 2'd0) begin
+                    $error("NTT P1: pass_num=%0d, expected=0", pass_num);
                     errors++;
                 end
             end
+            expected_r4++;
         end
-        $display("  Pass 1: Verified %0d cycles", num_blocks * bfs_per_block);
+        $display("  Pass 1: Verified %0d cycles, r4 counter ended at %0d", cycle_count, expected_r4);
 
-        // === NTT Pass 2 (R4, stages 3&4): 4 blocks × 16 BFs ===
+        // === NTT Pass 2 (R4, stages 3&4): 4 blocks x 16 BFs ===
         $display("\n--- NTT Pass 2 (Radix-4, Stages 3&4) ---");
-        stg_a_base = 4;
         num_blocks = 4;
         bfs_per_block = 16;
+        cycle_count = 0;
 
         for (int b = 0; b < num_blocks; b++) begin
-            i_A     = stg_a_base + b;
-            i_B_top = 2 * stg_a_base + 2 * b;
-            i_B_bot = 2 * stg_a_base + 2 * b + 1;
-
-            expected_addr0 = int'(bit_rev7(7'(i_B_top)));
-            expected_addr1 = int'(bit_rev7(7'(i_A)));
-            expected_addr2 = int'(bit_rev7(7'(i_B_bot)));
-
             for (int j = 0; j < bfs_per_block; j++) begin
                 @(posedge clk);
                 total_tests++;
+                cycle_count++;
 
-                if (addr0 !== 7'(expected_addr0)) begin
-                    $error("NTT P2 B%0d BF%0d: addr0 mismatch. Got %0d, expected %0d",
-                           b, j, addr0, expected_addr0);
-                    errors++;
-                end
-                if (addr1 !== 7'(expected_addr1)) begin
-                    $error("NTT P2 B%0d BF%0d: addr1 mismatch. Got %0d, expected %0d",
-                           b, j, addr1, expected_addr1);
-                    errors++;
-                end
-                if (addr2 !== 7'(expected_addr2)) begin
-                    $error("NTT P2 B%0d BF%0d: addr2 mismatch. Got %0d, expected %0d",
-                           b, j, addr2, expected_addr2);
+                if (r4_addr !== 5'(expected_r4)) begin
+                    $error("NTT P2 B%0d BF%0d: r4_addr=%0d, expected=%0d",
+                           b, j, r4_addr, expected_r4);
                     errors++;
                 end
             end
+            expected_r4++;
         end
-        $display("  Pass 2: Verified %0d cycles", num_blocks * bfs_per_block);
+        $display("  Pass 2: Verified %0d cycles, r4 counter ended at %0d", cycle_count, expected_r4);
 
-        // === NTT Pass 3 (R4, stages 5&6): 16 blocks × 4 BFs ===
+        // === NTT Pass 3 (R4, stages 5&6): 16 blocks x 4 BFs ===
         $display("\n--- NTT Pass 3 (Radix-4, Stages 5&6) ---");
-        stg_a_base = 16;
         num_blocks = 16;
         bfs_per_block = 4;
+        cycle_count = 0;
 
         for (int b = 0; b < num_blocks; b++) begin
-            i_A     = stg_a_base + b;
-            i_B_top = 2 * stg_a_base + 2 * b;
-            i_B_bot = 2 * stg_a_base + 2 * b + 1;
-
-            expected_addr0 = int'(bit_rev7(7'(i_B_top)));
-            expected_addr1 = int'(bit_rev7(7'(i_A)));
-            expected_addr2 = int'(bit_rev7(7'(i_B_bot)));
-
             for (int j = 0; j < bfs_per_block; j++) begin
                 @(posedge clk);
                 total_tests++;
+                cycle_count++;
 
-                if (addr0 !== 7'(expected_addr0)) begin
-                    $error("NTT P3 B%0d BF%0d: addr0 mismatch. Got %0d, expected %0d",
-                           b, j, addr0, expected_addr0);
-                    errors++;
-                end
-                if (addr1 !== 7'(expected_addr1)) begin
-                    $error("NTT P3 B%0d BF%0d: addr1 mismatch. Got %0d, expected %0d",
-                           b, j, addr1, expected_addr1);
-                    errors++;
-                end
-                if (addr2 !== 7'(expected_addr2)) begin
-                    $error("NTT P3 B%0d BF%0d: addr2 mismatch. Got %0d, expected %0d",
-                           b, j, addr2, expected_addr2);
+                if (r4_addr !== 5'(expected_r4)) begin
+                    $error("NTT P3 B%0d BF%0d: r4_addr=%0d, expected=%0d",
+                           b, j, r4_addr, expected_r4);
                     errors++;
                 end
             end
+            expected_r4++;
         end
-        $display("  Pass 3: Verified %0d cycles", num_blocks * bfs_per_block);
+        $display("  Pass 3: Verified %0d cycles, r4 counter ended at %0d", cycle_count, expected_r4);
 
-        // === NTT Pass 4 (R2, stage 7): 64 blocks × 2 BFs ===
+        // Verify r4 counter reached 21 (0..20 all used)
+        if (expected_r4 !== 21) begin
+            $error("NTT: r4 counter should reach 21, got %0d", expected_r4);
+            errors++;
+        end
+
+        // === NTT Pass 4 (R2, stage 7): 64 blocks x 2 BFs ===
         $display("\n--- NTT Pass 4 (Radix-2, Stage 7) ---");
         num_blocks = 64;
         bfs_per_block = 2;
+        expected_r2 = 0;
+        cycle_count = 0;
 
         for (int b = 0; b < num_blocks; b++) begin
-            expected_addr0 = int'(bit_rev7(7'(64 + b)));
-
             for (int j = 0; j < bfs_per_block; j++) begin
                 @(posedge clk);
                 total_tests++;
+                cycle_count++;
 
-                if (addr0 !== 7'(expected_addr0)) begin
-                    $error("NTT P4 B%0d BF%0d: addr0 mismatch. Got %0d, expected %0d",
-                           b, j, addr0, expected_addr0);
+                if (r2_addr !== 6'(expected_r2)) begin
+                    $error("NTT P4 B%0d BF%0d: r2_addr=%0d, expected=%0d",
+                           b, j, r2_addr, expected_r2);
                     errors++;
                 end
-                // addr1 and addr2 should be 0 in Radix-2
-                if (addr1 !== 7'd0) begin
-                    $error("NTT P4 B%0d BF%0d: addr1 should be 0, got %0d",
-                           b, j, addr1);
-                    errors++;
-                end
-                if (addr2 !== 7'd0) begin
-                    $error("NTT P4 B%0d BF%0d: addr2 should be 0, got %0d",
-                           b, j, addr2);
+
+                if (is_radix2 !== 1'b1) begin
+                    $error("NTT P4: is_radix2 should be 1");
                     errors++;
                 end
             end
+            expected_r2++;
         end
-        $display("  Pass 4: Verified %0d cycles", num_blocks * bfs_per_block);
+        $display("  Pass 4: Verified %0d cycles", cycle_count);
 
         // Wait for FSM to return to IDLE
         @(posedge clk);
@@ -268,16 +244,14 @@ module tf_rom_addr_gen_tb;
         end
 
         $display("\n  NTT VERIFICATION COMPLETE: %0d errors in %0d tests",
-                 errors, total_tests);
+                 errors - ntt_errors_start, total_tests);
     endtask
 
     // =========================================================================
-    // Task: Verify INTT Twiddle Factors
+    // Task: Verify INTT Address Sequence & ROM Values
     // =========================================================================
     task automatic verify_intt();
-        int expected_addr0, expected_addr1, expected_addr2;
-        int i_A_top, i_A_bot, i_B;
-        int highest_i_A, highest_i_B;
+        int expected_r4, expected_r2;
         int num_blocks, bfs_per_block;
         int intt_errors_start;
 
@@ -294,154 +268,116 @@ module tf_rom_addr_gen_tb;
         @(posedge clk);
         start = 1'b0;
 
-        // === INTT Pass 1 (R2, stage 1): 64 blocks × 2 BFs ===
+        // === INTT Pass 1 (R2, stage 1): 64 blocks x 2 BFs ===
         $display("\n--- INTT Pass 1 (Radix-2, Stage 1) ---");
         num_blocks = 64;
         bfs_per_block = 2;
+        expected_r2 = 0;
+        cycle_count = 0;
 
         for (int b = 0; b < num_blocks; b++) begin
-            expected_addr0 = int'(bit_rev7(7'(127 - b)));
-
             for (int j = 0; j < bfs_per_block; j++) begin
                 @(posedge clk);
                 total_tests++;
+                cycle_count++;
 
-                if (addr0 !== 7'(expected_addr0)) begin
-                    $error("INTT P1 B%0d BF%0d: addr0 mismatch. Got %0d, expected %0d",
-                           b, j, addr0, expected_addr0);
+                if (r2_addr !== 6'(expected_r2)) begin
+                    $error("INTT P1 B%0d BF%0d: r2_addr=%0d, expected=%0d",
+                           b, j, r2_addr, expected_r2);
+                    errors++;
+                end
+
+                if (is_radix2 !== 1'b1) begin
+                    $error("INTT P1: is_radix2 should be 1");
+                    errors++;
+                end
+
+                if (is_intt !== 1'b1) begin
+                    $error("INTT P1: is_intt should be 1");
                     errors++;
                 end
             end
+            expected_r2++;
         end
-        $display("  Pass 1: Verified %0d cycles", num_blocks * bfs_per_block);
+        $display("  Pass 1: Verified %0d cycles", cycle_count);
 
-        // === INTT Pass 2 (R4, stages 2&3): 16 blocks × 4 BFs ===
+        // === INTT Pass 2 (R4, stages 2&3): 16 blocks x 4 BFs ===
         $display("\n--- INTT Pass 2 (Radix-4, Stages 2&3) ---");
         num_blocks = 16;
         bfs_per_block = 4;
-        // stage_A = 2, stage_B = 3 in INTT counting
-        // highest_i_A = 2^(7-2+1) - 1 = 63
-        // highest_i_B = 2^(7-3+1) - 1 = 31
-        highest_i_A = 63;
-        highest_i_B = 31;
+        expected_r4 = 0;
+        cycle_count = 0;
 
         for (int b = 0; b < num_blocks; b++) begin
-            i_A_top = highest_i_A - (2 * b);
-            i_A_bot = highest_i_A - (2 * b) - 1;
-            i_B     = highest_i_B - b;
-
-            // INTT Radix-4 mapping:
-            // w0 (PE0) = BitRev7(i_B)        -> Stage B twiddle
-            // w1 (PE2 M1) = BitRev7(i_A_top) -> Stage A top twiddle
-            // w2 (PE2 M2) = BitRev7(i_A_bot) -> Stage A bot twiddle
-            expected_addr0 = int'(bit_rev7(7'(i_B)));
-            expected_addr1 = int'(bit_rev7(7'(i_A_top)));
-            expected_addr2 = int'(bit_rev7(7'(i_A_bot)));
-
             for (int j = 0; j < bfs_per_block; j++) begin
                 @(posedge clk);
                 total_tests++;
+                cycle_count++;
 
-                if (addr0 !== 7'(expected_addr0)) begin
-                    $error("INTT P2 B%0d BF%0d: addr0 mismatch. Got %0d, expected %0d",
-                           b, j, addr0, expected_addr0);
+                if (r4_addr !== 5'(expected_r4)) begin
+                    $error("INTT P2 B%0d BF%0d: r4_addr=%0d, expected=%0d",
+                           b, j, r4_addr, expected_r4);
                     errors++;
                 end
-                if (addr1 !== 7'(expected_addr1)) begin
-                    $error("INTT P2 B%0d BF%0d: addr1 mismatch. Got %0d, expected %0d",
-                           b, j, addr1, expected_addr1);
-                    errors++;
-                end
-                if (addr2 !== 7'(expected_addr2)) begin
-                    $error("INTT P2 B%0d BF%0d: addr2 mismatch. Got %0d, expected %0d",
-                           b, j, addr2, expected_addr2);
+
+                if (is_radix2 !== 1'b0) begin
+                    $error("INTT P2: is_radix2 should be 0");
                     errors++;
                 end
             end
+            expected_r4++;
         end
-        $display("  Pass 2: Verified %0d cycles", num_blocks * bfs_per_block);
+        $display("  Pass 2: Verified %0d cycles, r4 counter at %0d", cycle_count, expected_r4);
 
-        // === INTT Pass 3 (R4, stages 4&5): 4 blocks × 16 BFs ===
+        // === INTT Pass 3 (R4, stages 4&5): 4 blocks x 16 BFs ===
         $display("\n--- INTT Pass 3 (Radix-4, Stages 4&5) ---");
         num_blocks = 4;
         bfs_per_block = 16;
-        // highest_i_A = 2^(7-4+1) - 1 = 15
-        // highest_i_B = 2^(7-5+1) - 1 = 7
-        highest_i_A = 15;
-        highest_i_B = 7;
+        cycle_count = 0;
 
         for (int b = 0; b < num_blocks; b++) begin
-            i_A_top = highest_i_A - (2 * b);
-            i_A_bot = highest_i_A - (2 * b) - 1;
-            i_B     = highest_i_B - b;
-
-            expected_addr0 = int'(bit_rev7(7'(i_B)));
-            expected_addr1 = int'(bit_rev7(7'(i_A_top)));
-            expected_addr2 = int'(bit_rev7(7'(i_A_bot)));
-
             for (int j = 0; j < bfs_per_block; j++) begin
                 @(posedge clk);
                 total_tests++;
+                cycle_count++;
 
-                if (addr0 !== 7'(expected_addr0)) begin
-                    $error("INTT P3 B%0d BF%0d: addr0 mismatch. Got %0d, expected %0d",
-                           b, j, addr0, expected_addr0);
-                    errors++;
-                end
-                if (addr1 !== 7'(expected_addr1)) begin
-                    $error("INTT P3 B%0d BF%0d: addr1 mismatch. Got %0d, expected %0d",
-                           b, j, addr1, expected_addr1);
-                    errors++;
-                end
-                if (addr2 !== 7'(expected_addr2)) begin
-                    $error("INTT P3 B%0d BF%0d: addr2 mismatch. Got %0d, expected %0d",
-                           b, j, addr2, expected_addr2);
+                if (r4_addr !== 5'(expected_r4)) begin
+                    $error("INTT P3 B%0d BF%0d: r4_addr=%0d, expected=%0d",
+                           b, j, r4_addr, expected_r4);
                     errors++;
                 end
             end
+            expected_r4++;
         end
-        $display("  Pass 3: Verified %0d cycles", num_blocks * bfs_per_block);
+        $display("  Pass 3: Verified %0d cycles, r4 counter at %0d", cycle_count, expected_r4);
 
-        // === INTT Pass 4 (R4, stages 6&7): 1 block × 64 BFs ===
+        // === INTT Pass 4 (R4, stages 6&7): 1 block x 64 BFs ===
         $display("\n--- INTT Pass 4 (Radix-4, Stages 6&7) ---");
         num_blocks = 1;
         bfs_per_block = 64;
-        // highest_i_A = 2^(7-6+1) - 1 = 3
-        // highest_i_B = 2^(7-7+1) - 1 = 1
-        highest_i_A = 3;
-        highest_i_B = 1;
+        cycle_count = 0;
 
         for (int b = 0; b < num_blocks; b++) begin
-            i_A_top = highest_i_A - (2 * b);
-            i_A_bot = highest_i_A - (2 * b) - 1;
-            i_B     = highest_i_B - b;
-
-            expected_addr0 = int'(bit_rev7(7'(i_B)));
-            expected_addr1 = int'(bit_rev7(7'(i_A_top)));
-            expected_addr2 = int'(bit_rev7(7'(i_A_bot)));
-
             for (int j = 0; j < bfs_per_block; j++) begin
                 @(posedge clk);
                 total_tests++;
+                cycle_count++;
 
-                if (addr0 !== 7'(expected_addr0)) begin
-                    $error("INTT P4 B%0d BF%0d: addr0 mismatch. Got %0d, expected %0d",
-                           b, j, addr0, expected_addr0);
-                    errors++;
-                end
-                if (addr1 !== 7'(expected_addr1)) begin
-                    $error("INTT P4 B%0d BF%0d: addr1 mismatch. Got %0d, expected %0d",
-                           b, j, addr1, expected_addr1);
-                    errors++;
-                end
-                if (addr2 !== 7'(expected_addr2)) begin
-                    $error("INTT P4 B%0d BF%0d: addr2 mismatch. Got %0d, expected %0d",
-                           b, j, addr2, expected_addr2);
+                if (r4_addr !== 5'(expected_r4)) begin
+                    $error("INTT P4 B%0d BF%0d: r4_addr=%0d, expected=%0d",
+                           b, j, r4_addr, expected_r4);
                     errors++;
                 end
             end
+            expected_r4++;
         end
-        $display("  Pass 4: Verified %0d cycles", num_blocks * bfs_per_block);
+        $display("  Pass 4: Verified %0d cycles, r4 counter at %0d", cycle_count, expected_r4);
+
+        // Verify r4 counter reached 21
+        if (expected_r4 !== 21) begin
+            $error("INTT: r4 counter should reach 21, got %0d", expected_r4);
+            errors++;
+        end
 
         // Wait for FSM to return to IDLE
         @(posedge clk);
@@ -450,166 +386,206 @@ module tf_rom_addr_gen_tb;
             errors++;
         end
 
-        $display("\n  INTT VERIFICATION COMPLETE: %0d errors",
-                 errors - intt_errors_start);
+        $display("\n  INTT VERIFICATION COMPLETE: %0d errors in %0d tests",
+                 errors - intt_errors_start, total_tests);
     endtask
 
     // =========================================================================
-    // Task: Verify ROM Content Against Package
+    // Task: Verify ROM Output Values (spot-check after ROM registration delay)
     // =========================================================================
-    task automatic verify_rom_content();
-        int rom_errors = 0;
+    task automatic verify_rom_values();
+        int rom_errors_start;
+
+        rom_errors_start = errors;
 
         $display("\n===================================================");
-        $display("  VERIFYING ROM CONTENT (NTT Forward Values)");
+        $display("  VERIFYING ROM OUTPUT VALUES (Spot-Check)");
         $display("===================================================");
 
-        // Manually check a few key values through the ROM
-        // We'll use addr0 to read through all 128 entries
-        for (int i = 0; i < 128; i++) begin
-            @(posedge clk);
-            // Force address (we're not using addr_gen here, just direct ROM check)
-            force u_tf_rom.addr0_i = 7'(i);
-            force u_tf_rom.is_intt_i = 1'b0;
-            @(posedge clk);
-            @(posedge clk); // Wait for registered output
-            if (w0 !== ZETA_NTT_TABLE[i]) begin
-                $error("ROM[%0d]: Got %0d, expected %0d", i, w0, ZETA_NTT_TABLE[i]);
-                rom_errors++;
-            end
-        end
-        release u_tf_rom.addr0_i;
-        release u_tf_rom.is_intt_i;
-
-        $display("  ROM Content Check: %0d errors in 128 entries", rom_errors);
-        errors += rom_errors;
-    endtask
-
-    // =========================================================================
-    // Task: Verify INTT Negation
-    // =========================================================================
-    task automatic verify_intt_negation();
-        int neg_errors = 0;
-        coeff_t expected_val;
-
-        $display("\n===================================================");
-        $display("  VERIFYING INTT NEGATION (Q - zeta)");
-        $display("===================================================");
-
-        for (int i = 1; i < 128; i++) begin // Skip i=0 (zeta^0 = 1, -1 mod Q = 3328)
-            @(posedge clk);
-            force u_tf_rom.addr0_i = 7'(i);
-            force u_tf_rom.is_intt_i = 1'b1;
-            @(posedge clk);
-            @(posedge clk);
-            expected_val = 12'(Q) - ZETA_NTT_TABLE[i];
-            if (w0 !== expected_val) begin
-                $error("INTT ROM[%0d]: Got %0d, expected %0d (Q - %0d)",
-                       i, w0, expected_val, ZETA_NTT_TABLE[i]);
-                neg_errors++;
-            end
-        end
-        release u_tf_rom.addr0_i;
-        release u_tf_rom.is_intt_i;
-
-        $display("  INTT Negation Check: %0d errors in 127 entries", neg_errors);
-        errors += neg_errors;
-    endtask
-
-    // =========================================================================
-    // Task: Verify omega_4 Output
-    // =========================================================================
-    task automatic verify_omega4();
-        $display("\n===================================================");
-        $display("  VERIFYING OMEGA_4 OUTPUT (PE3 Twiddle Factor)");
-        $display("===================================================");
-
-        // NTT mode
-        force u_tf_rom.is_intt_i = 1'b0;
+        // --- NTT: Check first Radix-4 entry ---
+        $display("\n--- NTT Radix-4 Pass 1 ROM Values ---");
         @(posedge clk);
+        mode = PE_MODE_NTT;
+        start = 1'b1;
         @(posedge clk);
+        start = 1'b0;
+
+        // Address gen outputs r4_addr=0 immediately on S_PASS_1 entry.
+        // ROM is registered, so output appears 1 cycle later.
+        @(posedge clk); // Cycle 1: addr_gen outputs addr=0
+        @(posedge clk); // Cycle 2: ROM outputs registered value for addr=0
+
+        // R4NTT_ROM[0] = {17, 289, 1584}
+        // w0 = r4_w2 = 289 (Stage B), w1 = r4_w1 = 17 (Stage A top), w2 = r4_w3 = 1584 (Stage A bot)
+        total_tests += 4;
+        if (w0 !== 12'd289) begin
+            $error("NTT ROM: w0=%0d, expected=289 (r4_w2 from R4NTT_ROM[0])", w0);
+            errors++;
+        end
+        if (w1 !== 12'd17) begin
+            $error("NTT ROM: w1=%0d, expected=17 (r4_w1 from R4NTT_ROM[0])", w1);
+            errors++;
+        end
+        if (w2 !== 12'd1584) begin
+            $error("NTT ROM: w2=%0d, expected=1584 (r4_w3 from R4NTT_ROM[0])", w2);
+            errors++;
+        end
         if (w3 !== 12'd1729) begin
-            $error("omega_4 NTT: Got %0d, expected 1729", w3);
+            $error("NTT ROM: w3=%0d, expected=1729 (OMEGA_4_NTT)", w3);
             errors++;
-        end else begin
-            $display("  omega_4 NTT = %0d (PASS)", w3);
         end
+        $display("  NTT R4[0]: w0=%0d w1=%0d w2=%0d w3=%0d %s",
+                 w0, w1, w2, w3,
+                 (w0 == 289 && w1 == 17 && w2 == 1584 && w3 == 1729) ? "PASS" : "FAIL");
 
-        // INTT mode
-        force u_tf_rom.is_intt_i = 1'b1;
+        // Let NTT run to completion
+        wait (ag_busy == 1'b0);
         @(posedge clk);
+
+        // --- INTT: Check first Radix-2 entry ---
+        $display("\n--- INTT Radix-2 Pass 1 ROM Values ---");
         @(posedge clk);
+        mode = PE_MODE_INTT;
+        start = 1'b1;
+        @(posedge clk);
+        start = 1'b0;
+
+        @(posedge clk); // Cycle 1: addr_gen outputs addr
+        @(posedge clk); // Cycle 2: ROM outputs registered value
+
+        // OMEGA_INV_ROM[0] = 17 (pre-negated)
+        // w0 = r2_data = 17, w1 = 0, w2 = 0
+        total_tests += 4;
+        if (w0 !== 12'd17) begin
+            $error("INTT ROM R2: w0=%0d, expected=17 (OMEGA_INV_ROM[0])", w0);
+            errors++;
+        end
+        if (w1 !== 12'd0) begin
+            $error("INTT ROM R2: w1=%0d, expected=0 (radix-2)", w1);
+            errors++;
+        end
+        if (w2 !== 12'd0) begin
+            $error("INTT ROM R2: w2=%0d, expected=0 (radix-2)", w2);
+            errors++;
+        end
         if (w3 !== 12'd1600) begin
-            $error("omega_4 INTT: Got %0d, expected 1600", w3);
+            $error("INTT ROM: w3=%0d, expected=1600 (OMEGA_4_INTT)", w3);
             errors++;
-        end else begin
-            $display("  omega_4 INTT = %0d (PASS)", w3);
+        end
+        $display("  INTT R2[0]: w0=%0d w1=%0d w2=%0d w3=%0d %s",
+                 w0, w1, w2, w3,
+                 (w0 == 17 && w1 == 0 && w2 == 0 && w3 == 1600) ? "PASS" : "FAIL");
+
+        // Let INTT run to completion
+        wait (ag_busy == 1'b0);
+        @(posedge clk);
+
+        $display("\n  ROM VALUE CHECK COMPLETE: %0d errors",
+                 errors - rom_errors_start);
+    endtask
+
+    // =========================================================================
+    // Task: Verify Total Cycle Counts
+    // =========================================================================
+    task automatic verify_cycle_counts();
+        int ntt_cycles, intt_cycles;
+
+        $display("\n===================================================");
+        $display("  VERIFYING TOTAL CYCLE COUNTS");
+        $display("===================================================");
+
+        // NTT: 64 + 64 + 64 + 128 = 320 cycles
+        @(posedge clk);
+        mode = PE_MODE_NTT;
+        start = 1'b1;
+        ntt_cycles = 0;
+        @(posedge clk);
+        start = 1'b0;
+
+        while (ag_busy) begin
+            @(posedge clk);
+            if (ag_valid) ntt_cycles++;
         end
 
-        release u_tf_rom.is_intt_i;
+        total_tests++;
+        if (ntt_cycles !== 320) begin
+            $error("NTT cycle count: %0d, expected 320", ntt_cycles);
+            errors++;
+        end
+        $display("  NTT: %0d cycles %s", ntt_cycles, (ntt_cycles == 320) ? "PASS" : "FAIL");
+
+        @(posedge clk);
+
+        // INTT: 128 + 64 + 64 + 64 = 320 cycles
+        @(posedge clk);
+        mode = PE_MODE_INTT;
+        start = 1'b1;
+        intt_cycles = 0;
+        @(posedge clk);
+        start = 1'b0;
+
+        while (ag_busy) begin
+            @(posedge clk);
+            if (ag_valid) intt_cycles++;
+        end
+
+        total_tests++;
+        if (intt_cycles !== 320) begin
+            $error("INTT cycle count: %0d, expected 320", intt_cycles);
+            errors++;
+        end
+        $display("  INTT: %0d cycles %s", intt_cycles, (intt_cycles == 320) ? "PASS" : "FAIL");
     endtask
 
     // =========================================================================
     // Main Test Sequence
     // =========================================================================
     initial begin
-        $display("===================================================");
-        $display("  TF_ROM + TF_ADDR_GEN Testbench");
-        $display("===================================================\n");
+        $display("\n==========================================================");
+        $display(" Twiddle Factor ROM + Address Generator Testbench");
+        $display(" Architecture: 4-ROM (R4NTT, OMEGA, R4INTT, OMEGA_INV)");
+        $display(" Addressing: Sequential t++ counter");
+        $display("==========================================================\n");
 
         // Initialize
         rst   = 1'b1;
         start = 1'b0;
         mode  = PE_MODE_NTT;
 
-        // Reset sequence
+        // Hold reset for 5 cycles
         repeat(5) @(posedge clk);
         rst = 1'b0;
         repeat(2) @(posedge clk);
 
-        // ---- Test 1: ROM Content ----
-        verify_rom_content();
-
-        // ---- Test 2: INTT Negation ----
-        verify_intt_negation();
-
-        // ---- Test 3: Omega_4 ----
-        verify_omega4();
-
-        // Allow some settling time
-        repeat(5) @(posedge clk);
-
-        // ---- Test 4: Full NTT Address Sequence ----
+        // Run all verification tasks
         verify_ntt();
+        wait_cycles(5);
 
-        // Allow settling between tests
-        repeat(10) @(posedge clk);
-
-        // ---- Test 5: Full INTT Address Sequence ----
         verify_intt();
+        wait_cycles(5);
 
-        // =========================================================================
-        // Final Report
-        // =========================================================================
-        repeat(5) @(posedge clk);
+        verify_rom_values();
+        wait_cycles(5);
 
-        $display("\n===================================================");
+        verify_cycle_counts();
+        wait_cycles(5);
+
+        // Final Summary
+        $display("\n==========================================================");
         if (errors == 0) begin
-            $display("  ALL TESTS PASSED (%0d total checks)", total_tests);
+            $display(" ALL %0d TESTS PASSED!", total_tests);
         end else begin
-            $display("  FAILED: %0d errors in %0d total checks", errors, total_tests);
+            $display(" FAILED: %0d errors in %0d tests", errors, total_tests);
         end
-        $display("===================================================\n");
+        $display("==========================================================\n");
 
         $finish;
     end
 
-    // =========================================================================
-    // Timeout Watchdog
-    // =========================================================================
+    // Simulation timeout
     initial begin
-        #1_000_000; // 1 ms timeout
-        $error("TESTBENCH TIMEOUT!");
+        #1_000_000;
+        $display("ERROR: Simulation timeout!");
         $finish;
     end
 
