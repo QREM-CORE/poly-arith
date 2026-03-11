@@ -11,7 +11,8 @@
  *
  * Description:
  * Top-level wrapper for the Processing Elements.
- * Includes pipeline synchronization delays for cascaded Twiddle Factors.
+ * Includes pipeline synchronization delays for cascaded Twiddle Factors
+ * and Output Latency alignment.
  */
 
 import poly_arith_pkg::*;
@@ -87,8 +88,10 @@ module pe_unit (
     logic       pe3_valid_i, pe3_valid_o;
 
     // =========================================================================
-    // Twiddle Factor Synchronization Delays
+    // Pipeline Synchronization Delays
     // =========================================================================
+    
+    // -------- Twiddle Factor Input Delays --------
     coeff_t op_b0_d3, op_b0_d4;
     coeff_t op_b1_d4;
     coeff_t op_b2_d4;
@@ -115,6 +118,20 @@ module pe_unit (
     // op_b3 delay (4-cycle for NTT)
     delay_n #(.DWIDTH(12), .DEPTH(4)) u_delay_b3_4 (
         .clk(clk), .rst(rst), .data_i(op_b3_i), .data_o(op_b3_d4)
+    );
+
+    // -------- CWM Output Alignment Delays --------
+    // In CWM, the PE3 path finishes 1 cycle earlier than the PE0 path.
+    // These delays align the PE3 output to match the 8-cycle latency.
+    coeff_t pe3_u3_o_d1;
+    logic   pe3_valid_o_d1;
+
+    delay_n #(.DWIDTH(12), .DEPTH(1)) u_delay_pe3_u3_out (
+        .clk(clk), .rst(rst), .data_i(pe3_u3_o), .data_o(pe3_u3_o_d1)
+    );
+
+    delay_n #(.DWIDTH(1), .DEPTH(1)) u_delay_pe3_valid_out (
+        .clk(clk), .rst(rst), .data_i(pe3_valid_o), .data_o(pe3_valid_o_d1)
     );
 
     // =========================================================================
@@ -195,13 +212,14 @@ module pe_unit (
         pe3_a3_i = '0; pe3_b3_i = '0; pe3_w3_i = '0; pe3_tf_omega_4_i = '0;
         z0_o = '0; z1_o = '0; z2_o = '0; z3_o = '0;
 
-        // Default Control & Valid propagation
+        // Default Control propagation
         pe0_ctrl_i = ctrl_i; pe1_ctrl_i = ctrl_i;
         pe2_ctrl_i = ctrl_i; pe3_ctrl_i = ctrl_i;
 
-        pe0_valid_i = valid_i; pe1_valid_i = valid_i;
-        pe2_valid_i = valid_i; pe3_valid_i = valid_i;
-        valid_o = pe0_valid_o;
+        // Default Valid propagation to prevent latches
+        pe0_valid_i = 1'b0; pe1_valid_i = 1'b0;
+        pe2_valid_i = 1'b0; pe3_valid_i = 1'b0;
+        valid_o = 1'b0;
 
         case(ctrl_i)
             PE_MODE_CWM : begin
@@ -212,6 +230,14 @@ module pe_unit (
                 // op_a2_i = g_2i        op_b2_i = Unused
                 // op_a3_i = g_2i+1      op_b3_i = Unused
                 // ---------------------------------------------------------
+
+                // STAGE 1: PE1 and PE2 receive fresh inputs
+                pe1_valid_i = valid_i;
+                pe2_valid_i = valid_i;
+
+                // STAGE 2: PE0 and PE3 receive valid cascades
+                pe0_valid_i = pe1_valid_o & pe2_valid_m_o; // M matches U1/V1
+                pe3_valid_i = pe2_valid_o;                 // Driven by U2/V2
 
                 // CE0 Routing (Feedback Heavy)
                 pe0_a0_i = pe2_m_o;   // M
@@ -237,8 +263,9 @@ module pe_unit (
                 pe3_w3_i = op_b0_d3;  // omega (SYNCHRONIZED: 3-Cycle Delay)
 
                 // Outputs
-                z1_o = pe3_u3_o;      // U3
+                z1_o = pe3_u3_o_d1;   // U3 (SYNCHRONIZED: 1-Cycle Delay to match PE0)
                 z2_o = pe0_v0_o;      // V0
+                valid_o = pe0_valid_o & pe3_valid_o_d1; // Perfectly aligned to 8 CCs
             end
 
             PE_MODE_NTT : begin
@@ -250,12 +277,20 @@ module pe_unit (
                 // op_a3_i = X_3         op_b3_i = w_4^1 (or single omega)
                 // ---------------------------------------------------------
 
+                // STAGE 1: PE0 and PE2 receive fresh inputs
+                pe0_valid_i = valid_i;
+                pe2_valid_i = valid_i;
+
+                // STAGE 2: PE1 and PE3 receive valid cascades
+                pe1_valid_i = pe0_valid_o & pe2_valid_o;
+                pe3_valid_i = pe0_valid_o & pe2_valid_o;
+
                 // CE0 Routing
                 pe0_a0_i = op_a0_i;   // X_0
                 pe0_b0_i = op_a2_i;   // X_2
                 pe0_w0_i = op_b0_i;   // w_2 (No delay, Stage 1)
 
-                // CE1 Routing
+                // CE1 Routing (Cross-PE Feedback)
                 pe1_a1_i = pe0_u0_o;  // U0
                 pe1_b1_i = pe2_u2_o;  // U2
 
@@ -265,7 +300,7 @@ module pe_unit (
                 pe2_w1_i = op_b1_i;   // w_1 (No delay, Stage 1)
                 pe2_w2_i = op_b2_i;   // w_3 (No delay, Stage 1)
 
-                // CE3 Routing
+                // CE3 Routing (Cross-PE Feedback)
                 pe3_a3_i = pe0_v0_o;  // V0
                 pe3_b3_i = pe2_v2_o;  // V2
                 pe3_tf_omega_4_i = op_b3_d4; // w_4^1 (SYNCHRONIZED: 4-Cycle Delay)
@@ -275,6 +310,7 @@ module pe_unit (
                 z1_o = pe1_v1_o;      // V1
                 z2_o = pe3_u3_o;      // U3
                 z3_o = pe3_v3_o;      // V3
+                valid_o = pe1_valid_o & pe3_valid_o;
             end
 
             PE_MODE_INTT : begin
@@ -286,6 +322,14 @@ module pe_unit (
                 // op_a3_i = X_3         op_b3_i = w_4^-1 (or single inv)
                 // ---------------------------------------------------------
 
+                // STAGE 1: PE1 and PE3 receive fresh inputs
+                pe1_valid_i = valid_i;
+                pe3_valid_i = valid_i;
+
+                // STAGE 2: PE0 and PE2 receive valid cascades
+                pe0_valid_i = pe1_valid_o & pe3_valid_o;
+                pe2_valid_i = pe1_valid_o & pe3_valid_o;
+
                 // CE0 Routing (Cross-PE Feedback)
                 pe0_a0_i = pe3_u3_o;  // U3
                 pe0_b0_i = pe1_u1_o;  // U1
@@ -295,7 +339,7 @@ module pe_unit (
                 pe1_a1_i = op_a2_i;   // X_2
                 pe1_b1_i = op_a3_i;   // X_3
 
-                // CE2 Routing
+                // CE2 Routing (Cross-PE Feedback)
                 pe2_a2_i = pe3_v3_o;  // V3
                 pe2_b2_i = pe1_v1_o;  // V1
                 pe2_w1_i = op_b1_d4;  // w_1^-1 (SYNCHRONIZED: 4-Cycle Delay)
@@ -311,6 +355,7 @@ module pe_unit (
                 z1_o = pe2_u2_o;      // U2
                 z2_o = pe0_v0_o;      // V0
                 z3_o = pe2_v2_o;      // V2
+                valid_o = pe0_valid_o & pe2_valid_o;
             end
 
             PE_MODE_ADD, PE_MODE_SUB : begin
@@ -321,6 +366,12 @@ module pe_unit (
                 // op_a2_i = X_2         op_b2_i = Y_2
                 // op_a3_i = X_3         op_b3_i = Y_3
                 // ---------------------------------------------------------
+
+                // ALL PEs run in parallel (Stage 1)
+                pe0_valid_i = valid_i;
+                pe1_valid_i = valid_i;
+                pe2_valid_i = valid_i;
+                pe3_valid_i = valid_i;
 
                 // CE0 Routing
                 pe0_a0_i = op_a0_i;
@@ -338,7 +389,7 @@ module pe_unit (
                 pe3_a3_i = op_a3_i;
                 pe3_b3_i = op_b3_i;
 
-                // Outputs - Dynamically map U (Add) or V (Sub) to Z
+                // Outputs
                 if (ctrl_i == PE_MODE_ADD) begin
                     z0_o = pe0_u0_o;
                     z1_o = pe1_u1_o;
@@ -350,6 +401,7 @@ module pe_unit (
                     z2_o = pe2_v2_o;
                     z3_o = pe3_v3_o;
                 end
+                valid_o = pe0_valid_o & pe1_valid_o & pe2_valid_o & pe3_valid_o;
             end
 
             PE_MODE_COMP, PE_MODE_DECOMP : begin
@@ -360,6 +412,11 @@ module pe_unit (
                 // op_a2_i = X_2         op_b2_i = m/q
                 // op_a3_i = X_3         op_b3_i = m/q
                 // ---------------------------------------------------------
+
+                // PE0, PE2, PE3 run in parallel. PE1 is unused.
+                pe0_valid_i = valid_i;
+                pe2_valid_i = valid_i;
+                pe3_valid_i = valid_i;
 
                 // CE0 Routing
                 pe0_b0_i = op_a0_i;   // X_0
@@ -380,10 +437,10 @@ module pe_unit (
                 z1_o = pe2_u2_o;      // U2
                 z2_o = pe2_v2_o;      // V2
                 z3_o = pe3_v3_o;      // V3
+                valid_o = pe0_valid_o & pe2_valid_o & pe3_valid_o;
             end
 
             default : begin
-                // Safely falls back to top-level default assignments ('0)
                 // synthesis translate_off
                 $error("[AU Wrapper] ERROR: Invalid pe_mode_e state received: %b", ctrl_i);
                 // synthesis translate_on
