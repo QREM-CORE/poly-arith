@@ -17,7 +17,7 @@ module pe_unit_tb();
     logic           rst;
 
     logic           valid_i = 0;
-    pe_mode_e       ctrl_i = PE_MODE_CWM; 
+    pe_mode_e       ctrl_i = PE_MODE_CWM;
     logic           mode_i = 0; // 0 = Add/Radix-4, 1 = Sub/Radix-2
 
     // Primary Operand Bus (A)
@@ -153,6 +153,26 @@ module pe_unit_tb();
             exp.z2 = mod_add(pe0_v, mod_mul(pe2_v, b3));            // U3
             exp.z3 = mod_sub(pe0_v, mod_mul(pe2_v, b3));            // V3
         end
+        else if (mode == PE_MODE_NTT && mode_sel == 1'b1) begin
+            // ---------------------------------------------------
+            // NTT Radix-2 Mathematical Definition
+            // X0=a0, X1=a1, X2=a2, X3=a3
+            // w_A=b0, 1=b1, w_B=b2, unused=b3
+            // U0 = X0 + w_A*X2
+            // V0 = X0 - w_A*X2
+            // U2 = X1*1 + X3*w_B
+            // V2 = X1*1 - X3*w_B
+            // ---------------------------------------------------
+
+            coeff_t pe0_w_x2 = mod_mul(a2, b0);
+            coeff_t pe2_x1_1 = mod_mul(a1, b1);                     // a1 * 1
+            coeff_t pe2_w_x3 = mod_mul(a3, b2);
+
+            exp.z0 = mod_add(a0, pe0_w_x2);                         // U0
+            exp.z1 = mod_sub(a0, pe0_w_x2);                         // V0
+            exp.z2 = mod_add(pe2_x1_1, pe2_w_x3);                   // U2
+            exp.z3 = mod_sub(pe2_x1_1, pe2_w_x3);                   // V2
+        end
 
         // 2. Push expected result to queue
         expected_queue.push_back(exp);
@@ -206,6 +226,10 @@ module pe_unit_tb();
                     // Radix-4 NTT checks all 4 outputs
                     if (z0_o !== exp.z0 || z1_o !== exp.z1 || z2_o !== exp.z2 || z3_o !== exp.z3) match = 1'b0;
                 end
+                else if (exp.mode == PE_MODE_NTT && exp.mode_sel == 1'b1) begin
+                    // Radix-2 NTT checks all 4 outputs
+                    if (z0_o !== exp.z0 || z1_o !== exp.z1 || z2_o !== exp.z2 || z3_o !== exp.z3) match = 1'b0;
+                end
 
                 if (!match) begin
                     $display("==================================================");
@@ -221,6 +245,12 @@ module pe_unit_tb();
                         if (z1_o !== exp.z1) $display("   Z1 (V1) Mismatch! Exp: %0d, Got: %0d", exp.z1, z1_o);
                         if (z2_o !== exp.z2) $display("   Z2 (U3) Mismatch! Exp: %0d, Got: %0d", exp.z2, z2_o);
                         if (z3_o !== exp.z3) $display("   Z3 (V3) Mismatch! Exp: %0d, Got: %0d", exp.z3, z3_o);
+                    end
+                    else if (exp.mode == PE_MODE_NTT && exp.mode_sel == 1'b1) begin
+                        if (z0_o !== exp.z0) $display("   Z0 (U0) Mismatch! Exp: %0d, Got: %0d", exp.z0, z0_o);
+                        if (z1_o !== exp.z1) $display("   Z1 (V0) Mismatch! Exp: %0d, Got: %0d", exp.z1, z1_o);
+                        if (z2_o !== exp.z2) $display("   Z2 (U2) Mismatch! Exp: %0d, Got: %0d", exp.z2, z2_o);
+                        if (z3_o !== exp.z3) $display("   Z3 (V2) Mismatch! Exp: %0d, Got: %0d", exp.z3, z3_o);
                     end
 
                     $display("==================================================");
@@ -310,6 +340,33 @@ module pe_unit_tb();
                 rw2 = $urandom_range(0, 3328); rw1 = $urandom_range(0, 3328);
                 rw3 = $urandom_range(0, 3328); rw4 = $urandom_range(0, 3328);
                 drive_pipeline(rx0, rx1, rx2, rx3, rw2, rw1, rw3, rw4, PE_MODE_NTT, 1'b0, "NTT R4: Random Flow");
+            end
+        end
+        flush_pipeline();
+
+        // --------------------------------------------------
+        // Pipelined Stream: NTT Mode (Radix-2)
+        // op_a mapping: [X_0, X_1, X_2, X_3]
+        // op_b mapping: [w_A, 1, w_B, unused]
+        // --------------------------------------------------
+        $display("--- Testing Streaming NTT Mode (Radix-2, 4-Cycle Latency) ---");
+
+        //              X0  X1  X2  X3   wA  1 wB d/c  Mode         ModeSel  Name
+        drive_pipeline(  0,  0,  0,  0,   0, 1, 0, 0,  PE_MODE_NTT,  1'b1,   "NTT R2: All Zeros");
+        drive_pipeline(  1,  1,  1,  1,   1, 1, 1, 0,  PE_MODE_NTT,  1'b1,   "NTT R2: All Ones");
+        drive_pipeline( 10, 20, 30, 40,   2, 1, 3, 0,  PE_MODE_NTT,  1'b1,   "NTT R2: Simple Math");
+        drive_pipeline(100,  0,  0,  0,   0, 1, 0, 0,  PE_MODE_NTT,  1'b1,   "NTT R2: X0 Only");
+        drive_pipeline(3328, 3328, 3328, 3328, 3328, 1, 3328, 0, PE_MODE_NTT, 1'b1, "NTT R2: Max Stress");
+        // NOTE: b1 is explicitly driven to 1 below to ensure PE2 correctly bypasses multiplication!
+
+        begin
+            coeff_t rx0, rx1, rx2, rx3, rwA, rwB;
+            for (int i = 0; i < 20; i++) begin
+                rx0 = $urandom_range(0, 3328); rx1 = $urandom_range(0, 3328);
+                rx2 = $urandom_range(0, 3328); rx3 = $urandom_range(0, 3328);
+                rwA = $urandom_range(0, 3328); rwB = $urandom_range(0, 3328);
+                // Explicitly pinning b1 to 1 for the random test vectors
+                drive_pipeline(rx0, rx1, rx2, rx3, rwA, 1, rwB, 0, PE_MODE_NTT, 1'b1, "NTT R2: Random Flow");
             end
         end
         flush_pipeline();
