@@ -18,7 +18,7 @@ module pe_unit_tb();
 
     logic           valid_i;
     pe_mode_e       ctrl_i;
-    logic           addsub_sel_i;
+    logic           mode_i; // 0 = Add/Radix-4, 1 = Sub/Radix-2
 
     // Primary Operand Bus (A)
     coeff_t         op_a0_i, op_a1_i, op_a2_i, op_a3_i;
@@ -58,7 +58,7 @@ module pe_unit_tb();
         .rst(rst),
         .valid_i(valid_i),
         .ctrl_i(ctrl_i),
-        .addsub_sel_i(addsub_sel_i),
+        .mode_i(mode_i),
         .op_a0_i(op_a0_i), .op_a1_i(op_a1_i), .op_a2_i(op_a2_i), .op_a3_i(op_a3_i),
         .op_b0_i(op_b0_i), .op_b1_i(op_b1_i), .op_b2_i(op_b2_i), .op_b3_i(op_b3_i),
         .z0_o(z0_o), .z1_o(z1_o), .z2_o(z2_o), .z3_o(z3_o),
@@ -95,7 +95,7 @@ module pe_unit_tb();
     task automatic drive_pipeline(
         input coeff_t a0, input coeff_t a1, input coeff_t a2, input coeff_t a3,
         input coeff_t b0, input coeff_t b1, input coeff_t b2, input coeff_t b3,
-        input pe_mode_e mode, input logic addsub_sel, input string name
+        input pe_mode_e mode, input logic mode_sel, input string name
     );
         expected_result_t exp;
 
@@ -137,7 +137,7 @@ module pe_unit_tb();
         @(posedge clk);
         valid_i      <= 1'b1;
         ctrl_i       <= mode;
-        addsub_sel_i <= addsub_sel;
+        mode_i       <= mode_sel;
         op_a0_i <= a0; op_a1_i <= a1; op_a2_i <= a2; op_a3_i <= a3;
         op_b0_i <= b0; op_b1_i <= b1; op_b2_i <= b2; op_b3_i <= b3;
     endtask
@@ -205,7 +205,7 @@ module pe_unit_tb();
         rst = 1;
         valid_i = 0;
         ctrl_i = PE_MODE_CWM;
-        addsub_sel_i = 0;
+        mode_i = 0;
         op_a0_i = 0; op_a1_i = 0; op_a2_i = 0; op_a3_i = 0;
         op_b0_i = 0; op_b1_i = 0; op_b2_i = 0; op_b3_i = 0;
 
@@ -224,7 +224,7 @@ module pe_unit_tb();
         // --------------------------------------------------
         $display("--- Testing Streaming CWM Mode (8-Cycle Latency) ---");
 
-        //                  f0  f1  g0  g1    w   b1 b2 b3   Mode          SubSel  Name
+        //              f0  f1  g0  g1    w   b1 b2 b3   Mode          ModeSel Name
         drive_pipeline(  0,  0,  0,  0,   0,  0, 0, 0,   PE_MODE_CWM,  1'b0,   "CWM: All Zeros");
         drive_pipeline(  1,  1,  1,  1,   1,  0, 0, 0,   PE_MODE_CWM,  1'b0,   "CWM: All Ones");
         drive_pipeline( 10,  5,  2,  4,  20,  0, 0, 0,   PE_MODE_CWM,  1'b0,   "CWM: Simple Math");
@@ -240,7 +240,7 @@ module pe_unit_tb();
             // 1. Declare the variables first
             coeff_t rf0, rf1, rg0, rg1, rw;
 
-            for (int i = 0; i < 20; i++) begin
+            for (int i = 0; i < 100; i++) begin
                 // 2. Assign them inside the loop
                 rf0 = $urandom_range(0, 3328);
                 rf1 = $urandom_range(0, 3328);
