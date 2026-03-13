@@ -15,7 +15,7 @@
 \usepackage{multirow}
 \usepackage{array}
 
-\usetikzlibrary{arrows.meta, positioning, shapes.geometric, fit, calc, decorations.pathreplacing}
+\usetikzlibrary{arrows.meta, positioning, shapes.geometric, shapes.misc, fit, calc, decorations.pathreplacing, shadows}
 
 \geometry{margin=0.9in}
 
@@ -306,7 +306,7 @@ The hardware does \emph{not} use a single large ROM. Instead, it splits twiddle 
 \end{center}
 
 \paragraph{Why 36-bit bundled words?}
-During Radix-4 passes, three PEs (PE1, PE2, PE3) require three twiddle factors simultaneously in the same clock cycle. Packing them into a single 36-bit word ($3 \times 12$ bits) allows a single ROM read to supply all three multipliers without stalling the pipeline.
+During Radix-4 passes, two PEs consume three twiddle factors simultaneously: PE0 uses one ($\omega_2$) and PE2 uses two ($\omega_1, \omega_3$). Packing them into a single 36-bit word ($3 \times 12$ bits) allows a single ROM read to supply all three multipliers without stalling the pipeline.
 
 % =====================================================================
 \section{ROM~1: \rom{R4NTT\_ROM} --- Forward NTT, Radix-4 Passes}
@@ -669,6 +669,22 @@ For INTT mode, the standard (non-pre-negated) inverse is used:
   \texttt{OMEGA\_4\_INTT} &= 1600
 \end{align}
 
+% =====================================================================
+\section{The Radix-2 Division-by-2 Constant: $2^{-1} \bmod q$}
+\label{sec:inv2}
+% =====================================================================
+
+During INTT Radix-2 passes, the butterfly's ``U'' output computes $(A + B)/2$. Division by~2 in $\Zq$ is performed as multiplication by the modular inverse of~2:
+
+\begin{equation}
+  2^{-1} \bmod 3329 = 1665
+  \label{eq:inv2}
+\end{equation}
+
+\paragraph{Verification:} $2 \times 1665 = 3330 \equiv 1 \pmod{3329}$. $\checkmark$
+
+This constant is defined as \texttt{INV\_2\_MOD\_Q} in the package and is driven onto \port{w1\_o} by the ROM during INTT Radix-2 passes. During NTT Radix-2 passes, \port{w1\_o} is set to~$1$ (identity) since no scaling is required.
+
 % #########################################################################
 \part{Hardware Modules}
 % #########################################################################
@@ -693,10 +709,10 @@ For INTT mode, the standard (non-pre-negated) inverse is used:
   \port{r4\_addr\_i}  & in  & \sv{logic}   & 5  & Radix-4 ROM address [0..20] \\
   \port{r2\_addr\_i}  & in  & \sv{logic}   & 6  & Radix-2 ROM address [0..63] \\
   \midrule
-  \port{w0\_o}       & out & \sv{coeff\_t} & 12 & PE0 twiddle (Stage~B / R2 butterfly) \\
-  \port{w1\_o}       & out & \sv{coeff\_t} & 12 & PE2 multiplier~1 (Stage~A top) \\
-  \port{w2\_o}       & out & \sv{coeff\_t} & 12 & PE2 multiplier~2 (Stage~A bottom) \\
-  \port{w3\_o}       & out & \sv{coeff\_t} & 12 & PE3 fixed $\omega_4$ / $\omega_4^{-1}$ \\
+  \port{w0\_o}       & out & \sv{coeff\_t} & 12 & R4: Stage~B twiddle; R2: PE0 twiddle ($\omega$) \\
+  \port{w1\_o}       & out & \sv{coeff\_t} & 12 & R4: Stage~A top ($\omega_1$); R2: PE2~W1 constant ($1$ or $1665$) \\
+  \port{w2\_o}       & out & \sv{coeff\_t} & 12 & R4: Stage~A bot ($\omega_3$); R2: PE2 twiddle ($=\omega$, same as \port{w0}) \\
+  \port{w3\_o}       & out & \sv{coeff\_t} & 12 & Fixed $\omega_4$ (NTT) or $\omega_4^{-1}$ (INTT) \\
   \bottomrule
 \end{tabular}
 \end{center}
@@ -706,55 +722,142 @@ For INTT mode, the standard (non-pre-negated) inverse is used:
 \begin{figure}[H]
 \centering
 \begin{tikzpicture}[
-    romblock/.style={draw, thick, minimum width=3cm, minimum height=1.4cm, rounded corners=2pt, font=\footnotesize\ttfamily},
-    mux/.style={draw, thick, trapezium, trapezium angle=70, minimum width=1.5cm, minimum height=0.8cm, font=\footnotesize},
+    romblock/.style={draw, thick, minimum width=2.6cm, minimum height=1.3cm,
+                     rounded corners=3pt, font=\footnotesize\ttfamily,
+                     align=center, drop shadow={opacity=0.15}},
+    muxblock/.style={draw, thick, trapezium, trapezium angle=70,
+                     minimum width=1.6cm, minimum height=0.7cm,
+                     font=\footnotesize\sffamily},
+    regblock/.style={draw, thick, minimum width=2.8cm, minimum height=0.6cm,
+                     rounded corners=1pt, fill=orange!12,
+                     font=\footnotesize\ttfamily, drop shadow={opacity=0.1}},
+    constbox/.style={draw, thick, minimum width=1.6cm, minimum height=0.6cm,
+                     rounded corners=2pt, font=\footnotesize\ttfamily,
+                     fill=violet!8},
     arr/.style={-{Stealth[length=2.5mm]}, thick},
-    label/.style={font=\scriptsize\sffamily, fill=white, inner sep=1pt}
+    darr/.style={-{Stealth[length=2mm]}, thick, dashed, gray},
+    lbl/.style={font=\scriptsize\sffamily, fill=white, inner sep=1pt},
+    portlbl/.style={font=\scriptsize\ttfamily, nttblue}
 ]
-    % ROMs
-    \node[romblock, fill=blue!8]  (r4ntt)  at (0, 3)    {R4NTT\_ROM\\21$\times$36};
-    \node[romblock, fill=red!8]   (r4intt) at (0, 1.2)  {R4INTT\_ROM\\21$\times$36};
-    \node[romblock, fill=blue!8]  (omega)  at (5, 3)     {OMEGA\_ROM\\64$\times$12};
-    \node[romblock, fill=red!8]   (omginv) at (5, 1.2)   {OMEGA\_INV\_ROM\\64$\times$12};
 
-    % Muxes
-    \node[mux, fill=yellow!15, shape border rotate=270] (r4mux) at (0, -0.5) {R4 MUX};
-    \node[mux, fill=yellow!15, shape border rotate=270] (r2mux) at (5, -0.5) {R2 MUX};
+    % ---- Column 1: Radix-4 path ----
+    \node[romblock, fill=blue!10]  (r4ntt)  at (0, 4)   {R4NTT\_ROM\\21$\times$36b};
+    \node[romblock, fill=red!10]   (r4intt) at (0, 2.2) {R4INTT\_ROM\\21$\times$36b};
 
-    % Output mux
-    \node[mux, fill=green!12, shape border rotate=270, minimum width=2.5cm] (outmux) at (2.5, -2.5) {Output MUX};
+    \node[muxblock, fill=yellow!12, shape border rotate=270]
+        (r4mux) at (0, 0.5) {\small R4 Sel};
 
-    % Connections: ROMs to muxes
-    \draw[arr] (r4ntt.south) -- (r4mux.north west) node[label, midway, left] {36b};
-    \draw[arr] (r4intt.south) -- (r4mux.north east) node[label, midway, right] {36b};
-    \draw[arr] (omega.south) -- (r2mux.north west) node[label, midway, left] {12b};
-    \draw[arr] (omginv.south) -- (r2mux.north east) node[label, midway, right] {12b};
+    % ---- Column 2: Radix-2 path ----
+    \node[romblock, fill=blue!10]  (omega)  at (5.5, 4)   {OMEGA\_ROM\\64$\times$12b};
+    \node[romblock, fill=red!10]   (omginv) at (5.5, 2.2) {OMEGA\_INV\\64$\times$12b};
 
-    % Select signals
-    \draw[arr, dashed, gray] (-2.5, -0.5) -- (r4mux.west) node[label, midway, above] {\port{is\_intt\_i}};
-    \draw[arr, dashed, gray] (7.5, -0.5) -- (r2mux.east) node[label, midway, above] {\port{is\_intt\_i}};
+    \node[muxblock, fill=yellow!12, shape border rotate=270]
+        (r2mux) at (5.5, 0.5) {\small R2 Sel};
 
-    % Muxes to output mux
-    \draw[arr] (r4mux.south) -- ++(0,-0.5) -| (outmux.north west) node[label, near start, right] {$\omega_1,\omega_2,\omega_3$};
-    \draw[arr] (r2mux.south) -- ++(0,-0.5) -| (outmux.north east) node[label, near start, left] {$\omega$};
+    % ---- Unpack box ----
+    \node[draw, thick, minimum width=2.4cm, minimum height=0.6cm,
+          rounded corners=2pt, fill=gray!8, font=\footnotesize\sffamily]
+        (unpack) at (0, -0.8) {Unpack 36b};
 
-    % Select signal for output mux
-    \draw[arr, dashed, gray] (-2.5, -2.5) -- (outmux.west) node[label, midway, above] {\port{is\_radix2\_i}};
+    % ---- R2 constant mux (new!) ----
+    \node[constbox] (constmux) at (5.5, -0.8) {1 / 1665};
 
-    % Output register
-    \node[draw, thick, minimum width=3.5cm, minimum height=0.8cm, fill=orange!10, font=\footnotesize\ttfamily] (reg) at (2.5, -4.2) {FF Register (1 clk)};
-    \draw[arr] (outmux.south) -- (reg.north);
+    % ---- Output register bank ----
+    \node[regblock, minimum width=10cm] (reg) at (2.75, -3.8)
+        {Output Registers \normalfont(1 CC latency)};
 
-    % Outputs
-    \draw[arr] (reg.south) -- ++(0, -0.6) node[below, font=\footnotesize\ttfamily] {w0\_o, w1\_o, w2\_o, w3\_o};
+    % ---- Output MUX (is_radix2) ----
+    \node[muxblock, fill=green!10, shape border rotate=270, minimum width=2.2cm]
+        (outmux0) at (-0.6, -2.4) {\small w0 Sel};
+    \node[muxblock, fill=green!10, shape border rotate=270, minimum width=2.2cm]
+        (outmux1) at (2.0, -2.4)  {\small w1 Sel};
+    \node[muxblock, fill=green!10, shape border rotate=270, minimum width=2.2cm]
+        (outmux2) at (4.6, -2.4)  {\small w2 Sel};
+
+    % ---- Fixed omega_4 mux ----
+    \node[constbox, minimum width=2cm] (w4box) at (7.6, -2.4) {$\omega_4$ / $\omega_4^{-1}$};
+
+    % ========== Wiring ==========
 
     % Address inputs
-    \draw[arr] (-3.5, 3) -- (r4ntt.west) node[label, midway, above] {\port{r4\_addr\_i}};
-    \draw[arr] (-3.5, 1.2) -- (r4intt.west) node[label, midway, above] {\port{r4\_addr\_i}};
-    \draw[arr] (8.5, 3) -- (omega.east) node[label, midway, above] {\port{r2\_addr\_i}};
-    \draw[arr] (8.5, 1.2) -- (omginv.east) node[label, midway, above] {\port{r2\_addr\_i}};
+    \draw[arr, nttblue] (-3, 4)   -- (r4ntt.west)  node[lbl, midway, above] {\port{r4\_addr\_i}};
+    \draw[arr, nttblue] (-3, 2.2) -- (r4intt.west) node[lbl, midway, above] {\port{r4\_addr\_i}};
+    \draw[arr, nttblue] (8.5, 4)   -- (omega.east)  node[lbl, midway, above] {\port{r2\_addr\_i}};
+    \draw[arr, nttblue] (8.5, 2.2) -- (omginv.east) node[lbl, midway, above] {\port{r2\_addr\_i}};
+
+    % ROMs to level-1 muxes
+    \draw[arr] (r4ntt.south) -- ++(0,-0.25) -| ([xshift=-3mm]r4mux.north)
+        node[lbl, pos=0.25, right] {36b};
+    \draw[arr] (r4intt.south) -- ++(0,-0.15) -| ([xshift=3mm]r4mux.north)
+        node[lbl, pos=0.25, left] {36b};
+    \draw[arr] (omega.south)  -- ++(0,-0.25) -| ([xshift=-3mm]r2mux.north)
+        node[lbl, pos=0.25, right] {12b};
+    \draw[arr] (omginv.south) -- ++(0,-0.15) -| ([xshift=3mm]r2mux.north)
+        node[lbl, pos=0.25, left] {12b};
+
+    % is_intt select signals
+    \draw[darr] (-2.5, 0.5) -- (r4mux.west) node[lbl, midway, above] {\port{is\_intt}};
+    \draw[darr] (8.2, 0.5)  -- (r2mux.east) node[lbl, midway, above] {\port{is\_intt}};
+
+    % Level-1 mux outputs
+    \draw[arr] (r4mux.south) -- (unpack.north) node[lbl, midway, right] {36b};
+    \draw[arr] (r2mux.south) -- (r2mux.south |- constmux.north)
+        node[lbl, midway, right] {12b};
+
+    % Unpack to output muxes (R4 path)
+    \draw[arr] (unpack.south) -- ++(0, -0.4) -| (outmux0.north west)
+        node[lbl, pos=0.2, left] {$\omega_2$};
+    \draw[arr] (unpack.south) -- ++(0, -0.3) -| ([xshift=-2mm]outmux1.north west)
+        node[lbl, pos=0.15, left] {$\omega_1$};
+    \draw[arr] (unpack.south) -- ++(0, -0.2) -| ([xshift=-2mm]outmux2.north west)
+        node[lbl, pos=0.12, left] {$\omega_3$};
+
+    % R2 data to output muxes (R2 path)
+    \draw[arr] (constmux.south) -- ++(0, -0.2) -| (outmux0.north east)
+        node[lbl, pos=0.15, right] {$\omega$};
+    \draw[arr] (constmux.south) -- ++(0, -0.35) -| ([xshift=2mm]outmux1.north east)
+        node[lbl, pos=0.15, right] {$1$/$1665$};
+    \draw[arr] (constmux.south) -- ++(0, -0.5) -| ([xshift=2mm]outmux2.north east)
+        node[lbl, pos=0.12, right] {$\omega$};
+
+    % is_radix2 select
+    \draw[darr] (-2.5, -2.4) -- (outmux0.west) node[lbl, midway, above] {\port{is\_radix2}};
+
+    % Output muxes to register
+    \draw[arr] (outmux0.south) -- (outmux0.south |- reg.north);
+    \draw[arr] (outmux1.south) -- (outmux1.south |- reg.north);
+    \draw[arr] (outmux2.south) -- (outmux2.south |- reg.north);
+    \draw[arr] (w4box.south)   -- (w4box.south |- reg.north);
+
+    % is_intt to constant/omega4
+    \draw[darr] (8.2, -0.8) -- (constmux.east) node[lbl, midway, above] {\port{is\_intt}};
+    \draw[darr] (9.5, -2.4) -- (w4box.east) node[lbl, midway, above] {\port{is\_intt}};
+
+    % Final outputs
+    \draw[arr] ([xshift=-3cm]reg.south) -- ++(0, -0.5)
+        node[below, portlbl] {\port{w0\_o}};
+    \draw[arr] ([xshift=-1cm]reg.south) -- ++(0, -0.5)
+        node[below, portlbl] {\port{w1\_o}};
+    \draw[arr] ([xshift=1cm]reg.south) -- ++(0, -0.5)
+        node[below, portlbl] {\port{w2\_o}};
+    \draw[arr] ([xshift=3cm]reg.south) -- ++(0, -0.5)
+        node[below, portlbl] {\port{w3\_o}};
+
+    % Output labels below ports
+    \node[font=\tiny\sffamily, gray, below] at ([xshift=-3cm, yshift=-0.65cm]reg.south)
+        {PE0 twiddle};
+    \node[font=\tiny\sffamily, gray, below] at ([xshift=-1cm, yshift=-0.65cm]reg.south)
+        {PE2 W1};
+    \node[font=\tiny\sffamily, gray, below] at ([xshift=1cm, yshift=-0.65cm]reg.south)
+        {PE2 W2};
+    \node[font=\tiny\sffamily, gray, below] at ([xshift=3cm, yshift=-0.65cm]reg.south)
+        {PE3 $\omega_4$};
+
 \end{tikzpicture}
-\caption{Internal architecture of \sv{tf\_rom}.}
+\caption{Internal architecture of \sv{tf\_rom}. The Radix-2 path generates a constant
+  on \port{w1\_o} ($1$ for NTT, $1665$ for INTT) and duplicates the twiddle factor
+  $\omega$ onto both \port{w0\_o} and \port{w2\_o} to feed the two parallel PE
+  butterflies.}
 \label{fig:tf-rom-arch}
 \end{figure}
 
@@ -780,10 +883,17 @@ The module uses two levels of multiplexing:
 \begin{align}
   (\texttt{w0\_o},\; \texttt{w1\_o},\; \texttt{w2\_o}) &=
   \begin{cases}
-    (\texttt{r4\_w2},\; \texttt{r4\_w1},\; \texttt{r4\_w3}) & \text{if Radix-4} \\
-    (\texttt{r2\_data},\; 0,\; 0)                             & \text{if Radix-2}
+    (\texttt{r4\_w2},\; \texttt{r4\_w1},\; \texttt{r4\_w3}) & \text{if Radix-4} \\[4pt]
+    \bigl(\texttt{r2\_data},\;\; \underbrace{\texttt{is\_intt}\;?\;1665 : 1}_{\text{PE2 W1 constant}},\;\; \texttt{r2\_data}\bigr) & \text{if Radix-2}
   \end{cases}
 \end{align}
+
+\paragraph{Radix-2 Dual-Butterfly Rationale.}
+During Radix-2 passes, \sv{pe\_unit} operates PE0 and PE2 \textbf{in parallel} as two independent butterflies. Both butterflies in the same block use the \emph{same} twiddle factor, so \port{w0\_o} and \port{w2\_o} both carry \texttt{r2\_data}. The intermediate port \port{w1\_o} feeds PE2's W1 multiplier input, which must be:
+\begin{itemize}
+  \item \textbf{NTT Radix-2:} $1$ (identity --- PE2 computes a standard butterfly via $A \cdot 1 + B \cdot \omega$)
+  \item \textbf{INTT Radix-2:} $1665 = 2^{-1} \bmod 3329$ (division by~2 via modular multiplication, needed for the INTT scaling)
+\end{itemize}
 
 \paragraph{Output port mapping for Radix-4 mode:}
 
@@ -793,15 +903,31 @@ The module uses two levels of multiplexing:
 \toprule
 \textbf{Output} & \textbf{ROM field} & \textbf{Bit range} & \textbf{Role} \\
 \midrule
-\port{w0\_o} & $\omega_2$ & $[23:12]$ & Stage~B twiddle \\
-\port{w1\_o} & $\omega_1$ & $[35:24]$ & Stage~A top \\
-\port{w2\_o} & $\omega_3$ & $[11:0]$  & Stage~A bottom \\
-\port{w3\_o} & (fixed)    & ---       & $\omega_4$ or $\omega_4^{-1}$ \\
+\port{w0\_o} & $\omega_2$ & $[23:12]$ & Stage~B twiddle $\to$ PE0 \\
+\port{w1\_o} & $\omega_1$ & $[35:24]$ & Stage~A top $\to$ PE2 W1 \\
+\port{w2\_o} & $\omega_3$ & $[11:0]$  & Stage~A bottom $\to$ PE2 W2 \\
+\port{w3\_o} & (fixed)    & ---       & $\omega_4$ or $\omega_4^{-1}$ $\to$ PE3 \\
 \bottomrule
 \end{tabular}
 \end{center}
 
 Note the \textbf{re-ordering}: the ROM stores $\{\omega_1, \omega_2, \omega_3\}$, but the outputs map $\omega_2 \to$ \port{w0}, $\omega_1 \to$ \port{w1}, $\omega_3 \to$ \port{w2}. This matches the PE datapath expectations where PE0 (connected to \port{w0}) performs the Stage~B multiplication.
+
+\paragraph{Output port mapping for Radix-2 mode:}
+
+\begin{center}
+\renewcommand{\arraystretch}{1.2}
+\begin{tabular}{lccl}
+\toprule
+\textbf{Output} & \textbf{Source} & \textbf{NTT / INTT} & \textbf{Role} \\
+\midrule
+\port{w0\_o} & \texttt{r2\_data} & $\omega$ / $\widetilde{\omega^{-1}}$ & PE0 butterfly twiddle \\
+\port{w1\_o} & constant & $1$ / $1665$ & PE2 W1 (bypass / div-by-2) \\
+\port{w2\_o} & \texttt{r2\_data} & $\omega$ / $\widetilde{\omega^{-1}}$ & PE2 W2 (same twiddle as PE0) \\
+\port{w3\_o} & (fixed) & $1729$ / $1600$ & $\omega_4$ / $\omega_4^{-1}$ (unused by R2) \\
+\bottomrule
+\end{tabular}
+\end{center}
 
 \subsection{Read Latency}
 
@@ -846,30 +972,43 @@ This means the address presented at cycle $n$ produces valid output at cycle $n+
 \begin{figure}[H]
 \centering
 \begin{tikzpicture}[
-    state/.style={draw, thick, rounded rectangle, minimum width=2.2cm, minimum height=0.8cm, font=\footnotesize\sffamily\bfseries},
+    state/.style={draw, thick, rounded rectangle, minimum width=2.4cm,
+                  minimum height=0.9cm, font=\footnotesize\sffamily\bfseries,
+                  drop shadow={opacity=0.1}},
     arr/.style={-{Stealth[length=2.5mm]}, thick},
-    cond/.style={font=\scriptsize\sffamily, fill=white, inner sep=2pt}
+    cond/.style={font=\scriptsize\sffamily, fill=white, inner sep=2pt},
+    every loop/.style={looseness=5}
 ]
-    \node[state, fill=gray!15]   (idle) at (0,0)    {S\_IDLE};
-    \node[state, fill=blue!12]   (p1)   at (3.5,0)  {S\_PASS\_1};
-    \node[state, fill=blue!18]   (p2)   at (7,0)    {S\_PASS\_2};
-    \node[state, fill=blue!24]   (p3)   at (10.5,0) {S\_PASS\_3};
-    \node[state, fill=blue!30]   (p4)   at (10.5,-2.5){S\_PASS\_4};
+    \node[state, fill=gray!15]     (idle) at (0,0)      {S\_IDLE};
+    \node[state, fill=nttblue!12]  (p1)   at (3.5,0)    {S\_PASS\_1};
+    \node[state, fill=nttblue!18]  (p2)   at (7,0)      {S\_PASS\_2};
+    \node[state, fill=nttblue!24]  (p3)   at (10.5,0)   {S\_PASS\_3};
+    \node[state, fill=nttblue!30]  (p4)   at (10.5,-2.8){S\_PASS\_4};
 
+    % Forward transitions
     \draw[arr] (idle) -- (p1) node[cond, midway, above] {\port{start\_i}};
-    \draw[arr] (p1)   -- (p2) node[cond, midway, above] {\textit{pass\_last}};
-    \draw[arr] (p2)   -- (p3) node[cond, midway, above] {\textit{pass\_last}};
-    \draw[arr] (p3)   -- (p4) node[cond, midway, right] {\textit{pass\_last}};
-    \draw[arr] (p4)   -- ++(0,-1.2) -| (idle.south) node[cond, near start, right] {\textit{pass\_last}};
+    \draw[arr] (p1)   -- (p2) node[cond, midway, above] {\textit{pass\_done}};
+    \draw[arr] (p2)   -- (p3) node[cond, midway, above] {\textit{pass\_done}};
+    \draw[arr] (p3)   -- (p4) node[cond, midway, right] {\textit{pass\_done}};
+
+    % Return to idle
+    \draw[arr] (p4.south) -- ++(0,-1) -| (idle.south)
+        node[cond, near start, right] {\textit{pass\_done}};
 
     % CWM shortcut
-    \draw[arr, dashed, cwmgreen] (p1.south) -- ++(0,-0.8) -| (idle.south west) node[cond, near start, right] {\textit{CWM: pass\_last}};
+    \draw[arr, dashed, cwmgreen, thick]
+        (p1.south) -- ++(0,-0.9) -| ([xshift=3mm]idle.south)
+        node[cond, pos=0.25, right] {\textit{CWM done}};
 
-    % Self loops (implied)
-    \draw[arr, gray] (p1.north) to[loop above, looseness=5] node[cond] {counting} (p1.north);
-    \draw[arr, gray] (p2.north) to[loop above, looseness=5] node[cond] {counting} (p2.north);
+    % Self loops
+    \draw[arr, gray!60] (p1.north) to[loop above] node[cond] {counting} (p1.north);
+    \draw[arr, gray!60] (p2.north) to[loop above] node[cond] {counting} (p2.north);
+    \draw[arr, gray!60] (p3.north) to[loop above] node[cond] {counting} (p3.north);
+    \draw[arr, gray!60] (p4.east)  to[loop right] node[cond] {counting} (p4.east);
+
 \end{tikzpicture}
-\caption{FSM state diagram of \sv{tf\_addr\_gen}. CWM mode exits after Pass~1.}
+\caption{FSM state diagram of \sv{tf\_addr\_gen}. CWM mode exits after Pass~1.
+  Each state self-loops while counting butterflies/blocks within its pass.}
 \label{fig:fsm}
 \end{figure}
 
@@ -972,6 +1111,94 @@ The combinational output logic selects which counter drives which ROM address bu
 % #########################################################################
 
 % =====================================================================
+\section{PE Unit Interface: \port{op\_b} Bus Mapping}
+\label{sec:pe-unit-mapping}
+% =====================================================================
+
+The \sv{pe\_unit} module exposes a unified 4-port secondary operand bus
+(\port{op\_b0\_i}\,--\,\port{op\_b3\_i}) that is fed by \sv{tf\_rom} during
+NTT/INTT operations. The mapping is mode-dependent:
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    header/.style={font=\footnotesize\sffamily\bfseries, minimum height=0.6cm},
+    cell/.style={draw, minimum width=3cm, minimum height=0.55cm,
+                 font=\footnotesize\ttfamily, align=center},
+    modelbl/.style={font=\footnotesize\sffamily\bfseries, rotate=90,
+                    anchor=south},
+    arr/.style={-{Stealth[length=2mm]}, thick},
+    brk/.style={decorate, decoration={brace, amplitude=4pt, raise=2pt}}
+]
+    % Column headers
+    \node[header] at (2,   0) {\port{op\_b0\_i}};
+    \node[header] at (5,   0) {\port{op\_b1\_i}};
+    \node[header] at (8,   0) {\port{op\_b2\_i}};
+    \node[header] at (11,  0) {\port{op\_b3\_i}};
+
+    % Source labels
+    \node[header] at (-0.8, 0) {\textbf{Mode}};
+
+    % Row 1: NTT R4
+    \node[cell, fill=blue!8]  at (2,  -0.7) {$\omega_2$ (\port{w0\_o})};
+    \node[cell, fill=blue!8]  at (5,  -0.7) {$\omega_1$ (\port{w1\_o})};
+    \node[cell, fill=blue!8]  at (8,  -0.7) {$\omega_3$ (\port{w2\_o})};
+    \node[cell, fill=blue!8]  at (11, -0.7) {$\omega_4$ (\port{w3\_o})};
+    \node[modelbl] at (-0.3, -0.7) {NTT R4};
+
+    % Row 2: NTT R2
+    \node[cell, fill=blue!15] at (2,  -1.4) {$\omega$ (\port{w0\_o})};
+    \node[cell, fill=yellow!20] at (5,  -1.4) {$1$ (\port{w1\_o})};
+    \node[cell, fill=blue!15] at (8,  -1.4) {$\omega$ (\port{w2\_o})};
+    \node[cell, fill=gray!10] at (11, -1.4) {d/c};
+    \node[modelbl] at (-0.3, -1.4) {NTT R2};
+
+    % Row 3: INTT R4
+    \node[cell, fill=red!8]   at (2,  -2.1) {$\widetilde{\omega_2^{-1}}$ (\port{w0\_o})};
+    \node[cell, fill=red!8]   at (5,  -2.1) {$\widetilde{\omega_1^{-1}}$ (\port{w1\_o})};
+    \node[cell, fill=red!8]   at (8,  -2.1) {$\widetilde{\omega_3^{-1}}$ (\port{w2\_o})};
+    \node[cell, fill=red!8]   at (11, -2.1) {$\omega_4^{-1}$ (\port{w3\_o})};
+    \node[modelbl] at (-0.3, -2.1) {INTT R4};
+
+    % Row 4: INTT R2
+    \node[cell, fill=red!15]  at (2,  -2.8) {$\widetilde{\omega^{-1}}$ (\port{w0\_o})};
+    \node[cell, fill=violet!15] at (5,  -2.8) {$1665$ (\port{w1\_o})};
+    \node[cell, fill=red!15]  at (8,  -2.8) {$\widetilde{\omega^{-1}}$ (\port{w2\_o})};
+    \node[cell, fill=gray!10] at (11, -2.8) {d/c};
+    \node[modelbl] at (-0.3, -2.8) {INTT R2};
+
+    % Destination labels
+    \node[font=\tiny\sffamily, gray] at (2,  -3.4) {$\to$ PE0 W0};
+    \node[font=\tiny\sffamily, gray] at (5,  -3.4) {$\to$ PE2 W1};
+    \node[font=\tiny\sffamily, gray] at (8,  -3.4) {$\to$ PE2 W2};
+    \node[font=\tiny\sffamily, gray] at (11, -3.4) {$\to$ PE3 $\omega_4$};
+
+\end{tikzpicture}
+\caption{Complete \port{op\_b} bus mapping between \sv{tf\_rom} and \sv{pe\_unit}.
+  Yellow cells are fixed constants generated by \sv{tf\_rom};
+  violet indicates the $2^{-1} \bmod q$ scaling constant for INTT;
+  ``d/c'' denotes don't-care (PE3/PE1 unused in R2 mode).
+  Tilde ($\widetilde{\cdot}$) marks pre-negated inverse values.}
+\label{fig:opb-mapping}
+\end{figure}
+
+\paragraph{Pipeline Delay Handling within \sv{pe\_unit}.}
+The \sv{pe\_unit} module contains internal \sv{delay\_n} instances that re-time
+twiddle factors to match the cascaded PE pipeline:
+\begin{itemize}
+  \item \textbf{NTT Radix-4}: Stage~1 PEs (PE0, PE2) use \port{op\_b0}--\port{op\_b2}
+    with \emph{no delay}; Stage~2 PEs (PE1, PE3) use \port{op\_b3} with a \textbf{4-cycle delay}.
+  \item \textbf{INTT Radix-4}: Stage~1 PEs (PE1, PE3) use \port{op\_b3}
+    with \emph{no delay}; Stage~2 PEs (PE0, PE2) use \port{op\_b0}--\port{op\_b2}
+    with a \textbf{4-cycle delay}.
+  \item \textbf{Radix-2}: No cascading --- PE0 and PE2 run in parallel using
+    \port{op\_b0}/\port{op\_b2} directly.
+\end{itemize}
+
+These delays are transparent to \sv{tf\_rom} and \sv{tf\_addr\_gen}; they are
+handled entirely within \sv{pe\_unit}.
+
+% =====================================================================
 \section{Top-Level Wiring}
 \label{sec:wiring}
 % =====================================================================
@@ -981,37 +1208,71 @@ The combinational output logic selects which counter drives which ROM address bu
 \begin{figure}[H]
 \centering
 \begin{tikzpicture}[
-    block/.style={draw, thick, minimum width=3.8cm, minimum height=2.2cm, rounded corners=3pt, font=\small\ttfamily},
+    block/.style={draw, thick, minimum height=2.4cm, rounded corners=4pt,
+                  font=\small\ttfamily, align=center, drop shadow={opacity=0.12}},
     port/.style={font=\scriptsize\ttfamily},
     arr/.style={-{Stealth[length=2.5mm]}, thick},
-    wire/.style={font=\scriptsize\ttfamily, fill=white, inner sep=1pt}
+    darr/.style={-{Stealth[length=2mm]}, thick, dashed, gray},
+    wire/.style={font=\scriptsize\ttfamily, fill=white, inner sep=1pt},
+    buslbl/.style={font=\tiny\sffamily, gray}
 ]
-    % Blocks
-    \node[block, fill=orange!10] (ctrl) at (0, 0)   {AU Controller};
-    \node[block, fill=cyan!10]   (addr) at (6, 0)   {tf\_addr\_gen};
-    \node[block, fill=green!10]  (rom)  at (12, 0)  {tf\_rom};
-    \node[block, fill=purple!10] (pe)   at (12, -3.5) {pe\_unit\\(PE0..PE3)};
+    % ---- Blocks ----
+    \node[block, fill=orange!8, minimum width=3cm] (ctrl) at (0, 0)
+        {AU\\Controller};
+    \node[block, fill=cyan!8, minimum width=3.4cm]  (addr) at (5.5, 0)
+        {tf\_addr\_gen};
+    \node[block, fill=green!8, minimum width=3cm]   (rom)  at (11, 0)
+        {tf\_rom};
+    \node[block, fill=purple!8, minimum width=5cm, minimum height=2cm]
+        (pe) at (8.25, -4) {pe\_unit \normalfont(PE0\,--\,PE3)};
 
-    % Controller -> Addr Gen
-    \draw[arr] (ctrl.east) ++(0, 0.4) -- ++(2.2, 0) node[wire, midway, above] {start\_i} |- (addr.west |- {$(addr.north)!0.3!(addr.south)$});
-    \draw[arr] (ctrl.east) ++(0, -0.4) -- ++(2.2, 0) node[wire, midway, above] {mode\_i[1:0]} |- (addr.west |- {$(addr.north)!0.7!(addr.south)$});
+    % ---- Controller -> Addr Gen ----
+    \draw[arr] ([yshift=4mm]ctrl.east) -- node[wire, above] {start\_i}
+               ([yshift=4mm]addr.west);
+    \draw[arr] ([yshift=-4mm]ctrl.east) -- node[wire, above] {mode\_i}
+               ([yshift=-4mm]addr.west);
 
-    % Addr Gen -> ROM
-    \draw[arr] (addr.east) ++(0, 0.6) -- node[wire, above] {r4\_addr[4:0]} (rom.west |- {$(rom.north)!0.15!(rom.south)$});
-    \draw[arr] (addr.east) ++(0, 0.2) -- node[wire, above] {r2\_addr[5:0]} (rom.west |- {$(rom.north)!0.38!(rom.south)$});
-    \draw[arr] (addr.east) ++(0, -0.2) -- node[wire, above] {is\_intt} (rom.west |- {$(rom.north)!0.62!(rom.south)$});
-    \draw[arr] (addr.east) ++(0, -0.6) -- node[wire, above] {is\_radix2} (rom.west |- {$(rom.north)!0.85!(rom.south)$});
+    % ---- Addr Gen -> ROM ----
+    \draw[arr, nttblue] ([yshift=6mm]addr.east) -- node[wire, above] {r4\_addr{[4:0]}}
+               ([yshift=6mm]rom.west);
+    \draw[arr, nttblue] ([yshift=2mm]addr.east) -- node[wire, above] {r2\_addr{[5:0]}}
+               ([yshift=2mm]rom.west);
+    \draw[arr, inttred] ([yshift=-2mm]addr.east) -- node[wire, above] {is\_intt}
+               ([yshift=-2mm]rom.west);
+    \draw[arr, inttred] ([yshift=-6mm]addr.east) -- node[wire, above] {is\_radix2}
+               ([yshift=-6mm]rom.west);
 
-    % ROM -> PE
-    \draw[arr] (rom.south) ++(- 1.2, 0) -- ++(0, -0.75) node[wire, right] {w0\_o} |- (pe.north -| {$(pe.west)!0.15!(pe.east)$});
-    \draw[arr] (rom.south) ++(-0.4, 0) -- ++(0, -0.75) node[wire, right] {w1\_o} |- (pe.north -| {$(pe.west)!0.38!(pe.east)$});
-    \draw[arr] (rom.south) ++(0.4, 0) -- ++(0, -0.75) node[wire, right] {w2\_o} |- (pe.north -| {$(pe.west)!0.62!(pe.east)$});
-    \draw[arr] (rom.south) ++(1.2, 0) -- ++(0, -0.75) node[wire, right] {w3\_o} |- (pe.north -| {$(pe.west)!0.85!(pe.east)$});
+    % ---- ROM -> PE Unit (op_b bus) ----
+    \draw[arr, thick, nttblue]
+        ([xshift=-9mm]rom.south) -- ++(0,-0.7) -| ([xshift=-18mm]pe.north)
+        node[buslbl, pos=0.25, right] {w0\_o $\to$ op\_b0};
+    \draw[arr, thick, nttblue]
+        ([xshift=-3mm]rom.south) -- ++(0,-0.55) -| ([xshift=-6mm]pe.north)
+        node[buslbl, pos=0.2, right] {w1\_o $\to$ op\_b1};
+    \draw[arr, thick, nttblue]
+        ([xshift=3mm]rom.south)  -- ++(0,-0.7) -| ([xshift=6mm]pe.north)
+        node[buslbl, pos=0.25, left] {w2\_o $\to$ op\_b2};
+    \draw[arr, thick, nttblue]
+        ([xshift=9mm]rom.south)  -- ++(0,-0.55) -| ([xshift=18mm]pe.north)
+        node[buslbl, pos=0.2, left] {w3\_o $\to$ op\_b3};
 
-    % Status back to controller
-    \draw[arr, dashed, gray] (addr.south) -- ++(0, -1) -| (ctrl.south) node[wire, near start, right] {busy\_o, valid\_o, pass\_o};
+    % ---- Status: Addr Gen -> Controller ----
+    \draw[darr] ([yshift=-2mm]addr.south) -- ++(0,-1.2) -| ([yshift=-2mm]ctrl.south)
+        node[wire, pos=0.2, right] {busy, valid, pass{[1:0]}};
+
+    % ---- Data from SRAM (implied) ----
+    \draw[arr, gray, densely dotted]
+        (4, -4) -- (pe.west)
+        node[wire, midway, above] {op\_a (SRAM)};
+
+    % ---- PE outputs ----
+    \draw[arr] (pe.south) -- ++(0, -0.6)
+        node[below, font=\footnotesize\ttfamily] {z0\_o\,--\,z3\_o};
+
 \end{tikzpicture}
-\caption{Top-level connection between AU Controller, \sv{tf\_addr\_gen}, \sv{tf\_rom}, and \sv{pe\_unit}.}
+\caption{Top-level wiring between AU Controller, \sv{tf\_addr\_gen}, \sv{tf\_rom},
+  and \sv{pe\_unit}. The four \port{w$k$\_o} outputs map directly to the
+  \port{op\_b$k$\_i} bus of the PE array.}
 \label{fig:top-level}
 \end{figure}
 
@@ -1045,10 +1306,10 @@ tf_rom u_tf_rom (
     .is_radix2_i (tf_is_radix2),    // <- tf_addr_gen
     .r4_addr_i   (tf_r4_addr),      // <- tf_addr_gen
     .r2_addr_i   (tf_r2_addr),      // <- tf_addr_gen
-    .w0_o        (pe_w0),           // -> pe_unit (PE0)
-    .w1_o        (pe_w1),           // -> pe_unit (PE2 mul1)
-    .w2_o        (pe_w2),           // -> pe_unit (PE2 mul2)
-    .w3_o        (pe_w3)            // -> pe_unit (PE3)
+    .w0_o        (pe_op_b0),        // -> pe_unit.op_b0_i
+    .w1_o        (pe_op_b1),        // -> pe_unit.op_b1_i
+    .w2_o        (pe_op_b2),        // -> pe_unit.op_b2_i
+    .w3_o        (pe_op_b3)         // -> pe_unit.op_b3_i
 );
 \end{lstlisting}
 
@@ -1177,13 +1438,18 @@ CWM  & 1 & 64  & (external) \\
 
   \item \textbf{Completion}: When \port{busy\_o} deasserts, all 320 cycles (NTT/INTT) or 64 cycles (CWM) have completed. The system is ready for a new \port{start\_i} pulse.
 
-  \item \textbf{PE connections}: Wire the four twiddle outputs to the PE array:
+  \item \textbf{PE connections}: Wire the four twiddle outputs to the \sv{pe\_unit} \port{op\_b} bus:
     \begin{itemize}
-      \item \port{w0\_o} $\to$ PE0 (multiplier in butterfly)
-      \item \port{w1\_o} $\to$ PE2, multiplier input 1
-      \item \port{w2\_o} $\to$ PE2, multiplier input 2
-      \item \port{w3\_o} $\to$ PE3 (fixed $\omega_4$ or $\omega_4^{-1}$)
+      \item \port{w0\_o} $\to$ \port{op\_b0\_i} \;
+            (R4: Stage~B twiddle for PE0; R2: PE0 butterfly twiddle)
+      \item \port{w1\_o} $\to$ \port{op\_b1\_i} \;
+            (R4: Stage~A top for PE2~W1; R2: constant $1$ or $1665$)
+      \item \port{w2\_o} $\to$ \port{op\_b2\_i} \;
+            (R4: Stage~A bottom for PE2~W2; R2: PE2 butterfly twiddle)
+      \item \port{w3\_o} $\to$ \port{op\_b3\_i} \;
+            (Fixed $\omega_4$ or $\omega_4^{-1}$ for PE3; unused in R2 mode)
     \end{itemize}
+    See Figure~\ref{fig:opb-mapping} for the complete mode-dependent mapping.
 \end{enumerate}
 
 % =====================================================================
@@ -1205,6 +1471,8 @@ CWM  & 1 & 64  & (external) \\
   \item \textbf{1-cycle registered outputs}: ROM outputs are registered for timing closure, naturally aligning with the coefficient memory pipeline.
 
   \item \textbf{Fixed $\omega_4$ on dedicated output}: PE3's twiddle factor never changes within a mode (NTT or INTT), so it is implemented as a simple registered mux rather than consuming a ROM port.
+
+  \item \textbf{Radix-2 dual-butterfly support}: During Radix-2 passes, PE0 and PE2 operate as two independent butterflies in parallel. The ROM duplicates the twiddle factor onto both \port{w0\_o} and \port{w2\_o}, and generates the appropriate constant on \port{w1\_o} ($1$ for NTT bypass, $1665 = 2^{-1} \bmod q$ for INTT division-by-2). This eliminates the need for external constant-injection logic in the AU controller.
 \end{enumerate}
 
 \end{document}
