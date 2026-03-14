@@ -507,11 +507,11 @@ Algorithm~6 (Mixed-Radix-4/2 INTT), lines~8--21. The INTT Radix-4 loop runs for 
 \renewcommand{\arraystretch}{1.3}
 \begin{tabular}{cccccc}
   \toprule
-  \textbf{INTT Pass} & $p$ & $i = 4^p$ & \textbf{Stages (reversed)} & \textbf{Blocks} & \textbf{Entries} \\
+  \textbf{INTT Pass} & $p$ & $i = 4^p$ & \textbf{Reverses NTT Stages} & \textbf{Blocks} & \textbf{Entries} \\
   \midrule
-  2 & 1 & 4   & 6 \& 5 $\to$ 2 \& 3 & 16 & 16 \\
-  3 & 2 & 16  & 4 \& 3 $\to$ 4 \& 5 & 4  & 4  \\
-  4 & 3 & 64  & 2 \& 1 $\to$ 6 \& 7 & 1  & 1  \\
+  2 & 1 & 4   & 6 \& 5 & 16 & 16 \\
+  3 & 2 & 16  & 4 \& 3 & 4  & 4  \\
+  4 & 3 & 64  & 2 \& 1 & 1  & 1  \\
   \bottomrule
 \end{tabular}
 \end{center}
@@ -583,7 +583,7 @@ INTT pass $p=1$, block $k=0$, $\text{stg\_a\_base}=32$:
 
 Forward twiddles and pre-negation:
 \begin{center}
-\begin{tabular}{cccccc}
+\begin{tabular}{lcccc}
 \toprule
 & Exponent & Forward $\omega$ & Inverse $\omega^{-1}$ & Pre-negated $\modneg{\omega}$ \\
 \midrule
@@ -759,8 +759,11 @@ This constant is defined as \texttt{INV\_2\_MOD\_Q} in the package and is driven
           rounded corners=2pt, fill=gray!8, font=\footnotesize\sffamily]
         (unpack) at (0, -0.8) {Unpack 36b};
 
-    % ---- R2 constant mux (new!) ----
-    \node[constbox] (constmux) at (5.5, -0.8) {1 / 1665};
+    % ---- R2 data junction (wire from Radix-2 mux) ----
+    \coordinate (r2junc) at (5.5, -0.8);
+
+    % ---- Constant for w1 during Radix-2 mode (selected by is_intt) ----
+    \node[constbox] (constw1) at (2.0, -1.2) {1 / 1665};
 
     % ---- Output register bank ----
     \node[regblock, minimum width=10cm] (reg) at (2.75, -3.8)
@@ -801,8 +804,8 @@ This constant is defined as \texttt{INV\_2\_MOD\_Q} in the package and is driven
 
     % Level-1 mux outputs
     \draw[arr] (r4mux.south) -- (unpack.north) node[lbl, midway, right] {36b};
-    \draw[arr] (r2mux.south) -- (r2mux.south |- constmux.north)
-        node[lbl, midway, right] {12b};
+    \draw[arr] (r2mux.south) -- (r2junc) node[lbl, midway, right] {12b};
+    \fill[nttblue] (r2junc) circle (2pt);  % junction dot
 
     % Unpack to output muxes (R4 path)
     \draw[arr] (unpack.south) -- ++(0, -0.4) -| (outmux0.north west)
@@ -812,13 +815,15 @@ This constant is defined as \texttt{INV\_2\_MOD\_Q} in the package and is driven
     \draw[arr] (unpack.south) -- ++(0, -0.2) -| ([xshift=-2mm]outmux2.north west)
         node[lbl, pos=0.12, left] {$\omega_3$};
 
-    % R2 data to output muxes (R2 path)
-    \draw[arr] (constmux.south) -- ++(0, -0.2) -| (outmux0.north east)
-        node[lbl, pos=0.15, right] {$\omega$};
-    \draw[arr] (constmux.south) -- ++(0, -0.35) -| ([xshift=2mm]outmux1.north east)
-        node[lbl, pos=0.15, right] {$1$/$1665$};
-    \draw[arr] (constmux.south) -- ++(0, -0.5) -| ([xshift=2mm]outmux2.north east)
-        node[lbl, pos=0.12, right] {$\omega$};
+    % R2 twiddle data to w0 and w2 output muxes (same omega on both)
+    \draw[arr, nttblue] (r2junc) -- ++(0,-0.3) -| (outmux0.north east)
+        node[lbl, pos=0.15, right] {\color{nttblue}$\omega$};
+    \draw[arr, nttblue] (r2junc) -- ++(0,-0.5) -| ([xshift=2mm]outmux2.north east)
+        node[lbl, pos=0.12, right] {\color{nttblue}$\omega$};
+
+    % Constant (1 for NTT, 1665 for INTT) to w1 mux only
+    \draw[arr, violet] (constw1.south) -- ([xshift=2mm]outmux1.north east)
+        node[lbl, pos=0.5, right] {\color{violet}$1$/$1665$};
 
     % is_radix2 select
     \draw[darr] (-2.5, -2.4) -- (outmux0.west) node[lbl, midway, above] {\port{is\_radix2}};
@@ -829,8 +834,9 @@ This constant is defined as \texttt{INV\_2\_MOD\_Q} in the package and is driven
     \draw[arr] (outmux2.south) -- (outmux2.south |- reg.north);
     \draw[arr] (w4box.south)   -- (w4box.south |- reg.north);
 
-    % is_intt to constant/omega4
-    \draw[darr] (8.2, -0.8) -- (constmux.east) node[lbl, midway, above] {\port{is\_intt}};
+    % is_intt to constant w1 selector and omega4
+    \draw[darr] (constw1.north) -- ++(0,0.55)
+        node[above, lbl] {\port{is\_intt}};
     \draw[darr] (9.5, -2.4) -- (w4box.east) node[lbl, midway, above] {\port{is\_intt}};
 
     % Final outputs
@@ -852,6 +858,23 @@ This constant is defined as \texttt{INV\_2\_MOD\_Q} in the package and is driven
         {PE2 W2};
     \node[font=\tiny\sffamily, gray, below] at ([xshift=3cm, yshift=-0.65cm]reg.south)
         {PE3 $\omega_4$};
+
+    % Module boundary
+    \node[draw, dashed, gray!50, rounded corners=6pt, inner sep=8pt,
+          fit=(r4ntt)(omginv)(reg)(w4box),
+          label={[font=\footnotesize\sffamily\bfseries, gray!60]above left:{\sv{tf\_rom}}}] {};
+
+    % Legend (drawn directly, not with \tikz inline which can't see parent styles)
+    \begin{scope}[shift={(-3, -5.0)}]
+        \draw[arr, nttblue, thick] (0, 0.3) -- (0.6, 0.3);
+        \node[anchor=west, font=\scriptsize\sffamily, gray] at (0.7, 0.3) {R2 twiddle path};
+        \draw[arr, violet, thick] (4.5, 0.3) -- (5.1, 0.3);
+        \node[anchor=west, font=\scriptsize\sffamily, gray] at (5.2, 0.3) {R2 constant path};
+        \draw[darr] (0, 0) -- (0.6, 0);
+        \node[anchor=west, font=\scriptsize\sffamily, gray] at (0.7, 0) {Control signal};
+        \draw[arr, thick] (4.5, 0) -- (5.1, 0);
+        \node[anchor=west, font=\scriptsize\sffamily, gray] at (5.2, 0) {R4 data path};
+    \end{scope}
 
 \end{tikzpicture}
 \caption{Internal architecture of \sv{tf\_rom}. The Radix-2 path generates a constant
@@ -954,7 +977,7 @@ This means the address presented at cycle $n$ produces valid output at cycle $n+
   \port{clk}          & in  & \sv{logic}    & 1  & System clock \\
   \port{rst}          & in  & \sv{logic}    & 1  & Synchronous active-high reset \\
   \port{start\_i}     & in  & \sv{logic}    & 1  & Start pulse (1 cycle) \\
-  \port{mode\_i}      & in  & \sv{pe\_mode\_e}& 2 & NTT / INTT / CWM \\
+  \port{mode\_i}      & in  & \sv{pe\_mode\_e}& 4 & NTT / INTT / CWM \\
   \midrule
   \port{r4\_addr\_o}  & out & \sv{logic}    & 5  & $\to$ \port{tf\_rom.r4\_addr\_i} \\
   \port{r2\_addr\_o}  & out & \sv{logic}    & 6  & $\to$ \port{tf\_rom.r2\_addr\_i} \\
@@ -977,6 +1000,7 @@ This means the address presented at cycle $n$ produces valid output at cycle $n+
                   drop shadow={opacity=0.1}},
     arr/.style={-{Stealth[length=2.5mm]}, thick},
     cond/.style={font=\scriptsize\sffamily, fill=white, inner sep=2pt},
+    cyc/.style={font=\tiny\sffamily, text=gray, fill=white, inner sep=1pt},
     every loop/.style={looseness=5}
 ]
     \node[state, fill=gray!15]     (idle) at (0,0)      {S\_IDLE};
@@ -984,6 +1008,12 @@ This means the address presented at cycle $n$ produces valid output at cycle $n+
     \node[state, fill=nttblue!18]  (p2)   at (7,0)      {S\_PASS\_2};
     \node[state, fill=nttblue!24]  (p3)   at (10.5,0)   {S\_PASS\_3};
     \node[state, fill=nttblue!30]  (p4)   at (10.5,-2.8){S\_PASS\_4};
+
+    % Pass type annotations below each state
+    \node[cyc, below=1mm of p1] {NTT: R4\,(64\,CC) / INTT: R2\,(128\,CC)};
+    \node[cyc, below=1mm of p2] {R4\,(64\,CC)};
+    \node[cyc, below=1mm of p3] {R4\,(64\,CC)};
+    \node[cyc, below=1mm of p4] {NTT: R2\,(128\,CC) / INTT: R4\,(64\,CC)};
 
     % Forward transitions
     \draw[arr] (idle) -- (p1) node[cond, midway, above] {\port{start\_i}};
@@ -998,7 +1028,7 @@ This means the address presented at cycle $n$ produces valid output at cycle $n+
     % CWM shortcut
     \draw[arr, dashed, cwmgreen, thick]
         (p1.south) -- ++(0,-0.9) -| ([xshift=3mm]idle.south)
-        node[cond, pos=0.25, right] {\textit{CWM done}};
+        node[cond, pos=0.25, right] {\textit{CWM done}\; (64\,CC)};
 
     % Self loops
     \draw[arr, gray!60] (p1.north) to[loop above] node[cond] {counting} (p1.north);
@@ -1006,9 +1036,14 @@ This means the address presented at cycle $n$ produces valid output at cycle $n+
     \draw[arr, gray!60] (p3.north) to[loop above] node[cond] {counting} (p3.north);
     \draw[arr, gray!60] (p4.east)  to[loop right] node[cond] {counting} (p4.east);
 
+    % Total cycle annotation
+    \node[font=\scriptsize\sffamily, text=gray, anchor=north west] at (-1, -4.2)
+        {Total: 320\,CC (NTT/INTT) or 64\,CC (CWM)};
+
 \end{tikzpicture}
 \caption{FSM state diagram of \sv{tf\_addr\_gen}. CWM mode exits after Pass~1.
-  Each state self-loops while counting butterflies/blocks within its pass.}
+  Each state self-loops while counting butterflies/blocks within its pass.
+  Cycle counts (CC) are shown per pass.}
 \label{fig:fsm}
 \end{figure}
 
@@ -1031,7 +1066,7 @@ The module maintains four counters:
 \end{center}
 
 \paragraph{Critical detail: \sv{r4\_cnt\_r} persistence.}
-The Radix-4 ROM counter is \emph{not} reset between passes. It starts at 0 when \port{start\_i} fires and counts continuously from 0 to 20 across all three Radix-4 passes:
+The Radix-4 ROM counter is \emph{not} reset between passes. It starts at 0 when \port{start\_i} fires and increments at \emph{every} block boundary (including the last block of each pass), counting continuously from 0 to 20 across all three Radix-4 passes:
 \begin{itemize}
   \item NTT: Pass~1 uses $t=0$, Pass~2 uses $t=1..4$, Pass~3 uses $t=5..20$
   \item INTT: Pass~2 uses $t=0..15$, Pass~3 uses $t=16..19$, Pass~4 uses $t=20$
@@ -1229,7 +1264,7 @@ handled entirely within \sv{pe\_unit}.
     % ---- Controller -> Addr Gen ----
     \draw[arr] ([yshift=4mm]ctrl.east) -- node[wire, above] {start\_i}
                ([yshift=4mm]addr.west);
-    \draw[arr] ([yshift=-4mm]ctrl.east) -- node[wire, above] {mode\_i}
+    \draw[arr] ([yshift=-4mm]ctrl.east) -- node[wire, above] {mode\_i{[3:0]}}
                ([yshift=-4mm]addr.west);
 
     % ---- Addr Gen -> ROM ----
@@ -1242,19 +1277,19 @@ handled entirely within \sv{pe\_unit}.
     \draw[arr, inttred] ([yshift=-6mm]addr.east) -- node[wire, above] {is\_radix2}
                ([yshift=-6mm]rom.west);
 
-    % ---- ROM -> PE Unit (op_b bus) ----
+    % ---- ROM -> PE Unit (op_b bus, 4 x 12-bit) ----
     \draw[arr, thick, nttblue]
         ([xshift=-9mm]rom.south) -- ++(0,-0.7) -| ([xshift=-18mm]pe.north)
-        node[buslbl, pos=0.25, right] {w0\_o $\to$ op\_b0};
+        node[buslbl, pos=0.25, right] {w0\_o $\to$ op\_b0\;(12b)};
     \draw[arr, thick, nttblue]
         ([xshift=-3mm]rom.south) -- ++(0,-0.55) -| ([xshift=-6mm]pe.north)
-        node[buslbl, pos=0.2, right] {w1\_o $\to$ op\_b1};
+        node[buslbl, pos=0.2, right] {w1\_o $\to$ op\_b1\;(12b)};
     \draw[arr, thick, nttblue]
         ([xshift=3mm]rom.south)  -- ++(0,-0.7) -| ([xshift=6mm]pe.north)
-        node[buslbl, pos=0.25, left] {w2\_o $\to$ op\_b2};
+        node[buslbl, pos=0.25, left] {w2\_o $\to$ op\_b2\;(12b)};
     \draw[arr, thick, nttblue]
         ([xshift=9mm]rom.south)  -- ++(0,-0.55) -| ([xshift=18mm]pe.north)
-        node[buslbl, pos=0.2, left] {w3\_o $\to$ op\_b3};
+        node[buslbl, pos=0.2, left] {w3\_o $\to$ op\_b3\;(12b)};
 
     % ---- Status: Addr Gen -> Controller ----
     \draw[darr] ([yshift=-2mm]addr.south) -- ++(0,-1.2) -| ([yshift=-2mm]ctrl.south)

@@ -294,7 +294,11 @@ module tf_addr_gen (
                         bf_cnt_r    <= '0;
                         block_cnt_r <= '0;
                         r2_cnt_r    <= '0;
-                        // Note: r4_cnt_r is NOT reset -- it persists across R4 passes
+                        // r4_cnt_r persists across R4 passes AND increments at every
+                        // block boundary (including the last block of a pass) to
+                        // maintain the sequential t++ semantics (0, 1..4, 5..20).
+                        if (!pass_is_radix2 && !is_cwm_r)
+                            r4_cnt_r <= r4_cnt_r + 5'd1;
                     end else if (bf_last) begin
                         // End of block: advance to next block
                         bf_cnt_r    <= '0;

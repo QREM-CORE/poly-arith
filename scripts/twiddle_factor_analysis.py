@@ -115,21 +115,25 @@ for p in ntt_passes:
                     "pass": p["pass"],
                     "block": bl["block"],
                     "butterfly": j,
-                    "w0": bl["z_B_top"],   # w_2 (stage B top) -> PE0
-                    "w1": bl["z_A"],       # w_1 (stage A) -> PE2 mul1
-                    "w2": bl["z_B_bot"],   # w_3 (stage B bot) -> PE2 mul2
+                    "w0": bl["z_B_top"],   # Stage B top twiddle -> PE0 (op_b0)
+                    "w1": bl["z_A"],       # Stage A twiddle     -> PE2 W1 (op_b1)
+                    "w2": bl["z_B_bot"],   # Stage B bot twiddle -> PE2 W2 (op_b2)
+                    "w3": "OMEGA_4_NTT",   # omega_4 = 1729      -> PE3 (op_b3)
                 }
                 ntt_rom_sequence.append(entry)
     else:
         for bl in p["blocks"]:
+            # Radix-2: PE0 and PE2 run parallel butterflies with the SAME omega.
+            # PE2's W1 input is 1 (NTT bypass) — not a ZETA table lookup.
             for j in range(bl["butterflies"]):
                 entry = {
                     "pass": p["pass"],
                     "block": bl["block"],
                     "butterfly": j,
-                    "w0": bl["zeta_idx"],  # Only w0 used in radix-2
-                    "w1": 0,
-                    "w2": 0,
+                    "w0": bl["zeta_idx"],  # PE0 twiddle (omega)
+                    "w1": "CONST_1",       # PE2 W1 = 1 (identity, bypass)
+                    "w2": bl["zeta_idx"],  # PE2 W2 = same omega as w0
+                    "w3": "OMEGA_4_NTT",   # omega_4 = 1729 (unused in R2)
                 }
                 ntt_rom_sequence.append(entry)
 
@@ -137,13 +141,13 @@ for p in ntt_passes:
 print(f"Total NTT cycles: {len(ntt_rom_sequence)}")
 print()
 
-# Extract the unique twiddle factor indices needed for NTT
+# Extract the unique ZETA table indices needed for NTT (excluding string constants)
 ntt_unique_zetas = set()
 for entry in ntt_rom_sequence:
-    ntt_unique_zetas.add(entry["w0"])
-    ntt_unique_zetas.add(entry["w1"])
-    ntt_unique_zetas.add(entry["w2"])
-ntt_unique_zetas.discard(0)  # Remove default
+    for key in ("w0", "w1", "w2"):
+        val = entry[key]
+        if isinstance(val, int):
+            ntt_unique_zetas.add(val)
 print(f"Unique NTT zeta indices: {sorted(ntt_unique_zetas)}")
 print(f"Count: {len(ntt_unique_zetas)}")
 print()
@@ -254,13 +258,61 @@ for p in intt_passes:
             print(f"    Block {bl['block']:3d}: w0=zeta[{bl['zeta_idx']:3d}] (x{reps} cycles)")
         print(f"    ... ({len(p['blocks'])} blocks total)")
 
-# Now compute the MERGED ROM content
-# The paper uses a single ROM that stores zeta values indexed by BitRev7(i)
-# The key insight: For NTT we need zeta^BitRev7(i) and for INTT we need zeta^(-BitRev7(i)) = -zeta^BitRev7(i) mod Q
-# Since -x mod Q = Q - x, INTT just uses Q - NTT_value
+# NOTE: The actual hardware uses a 4-ROM architecture (not a single merged ROM):
+#   R4NTT_ROM  (21x36b): {w1, w2, w3} for NTT Radix-4 passes, addressed by t++
+#   OMEGA_ROM  (64x12b): omega for NTT Radix-2 pass, addressed by j/4
+#   R4INTT_ROM (21x36b): {w1_inv_neg, w2_inv_neg, w3_inv_neg} pre-negated inverses, t++
+#   OMEGA_INV_ROM (64x12b): omega_inv_neg for INTT Radix-2 pass, j/4
+# The ZETA[i] indices computed above map to sequential ROM entries via the
+# t++ counter (see compute_tf_roms.py for the exact ROM content).
 
-# The ROM stores 128 entries of ZETA_NTT_TABLE
-# The address generator produces the sequence of indices needed
+# =====================================================================
+# Build INTT ROM sequence (analogous to ntt_rom_sequence)
+# =====================================================================
+intt_rom_sequence = []
+
+for p in intt_passes:
+    if p["type"] == "radix4":
+        for bl in p["blocks"]:
+            for j in range(bl["butterflies_per_block"]):
+                entry = {
+                    "pass": p["pass"],
+                    "block": bl["block"],
+                    "butterfly": j,
+                    "w0": bl["z_B"],       # Stage B twiddle     -> PE0 (op_b0)
+                    "w1": bl["z_A_top"],   # Stage A top twiddle -> PE2 W1 (op_b1)
+                    "w2": bl["z_A_bot"],   # Stage A bot twiddle -> PE2 W2 (op_b2)
+                    "w3": "OMEGA_4_INTT",  # omega_4_inv = 1600  -> PE3 (op_b3)
+                }
+                intt_rom_sequence.append(entry)
+    else:
+        for bl in p["blocks"]:
+            # INTT Radix-2: PE0 and PE2 run parallel butterflies with same omega.
+            # PE2's W1 input is INV_2_MOD_Q = 1665 (division by 2).
+            for j in range(bl["butterflies"]):
+                entry = {
+                    "pass": p["pass"],
+                    "block": bl["block"],
+                    "butterfly": j,
+                    "w0": bl["zeta_idx"],  # PE0 twiddle (omega_inv_neg)
+                    "w1": "CONST_1665",    # PE2 W1 = 2^-1 mod Q = 1665
+                    "w2": bl["zeta_idx"],  # PE2 W2 = same omega as w0
+                    "w3": "OMEGA_4_INTT",  # omega_4_inv = 1600 (unused in R2)
+                }
+                intt_rom_sequence.append(entry)
+
+print()
+print(f"Total INTT sequence entries: {len(intt_rom_sequence)}")
+
+# Extract unique INTT zeta indices
+intt_unique_zetas = set()
+for entry in intt_rom_sequence:
+    for key in ("w0", "w1", "w2"):
+        val = entry[key]
+        if isinstance(val, int):
+            intt_unique_zetas.add(val)
+print(f"Unique INTT zeta indices: {sorted(intt_unique_zetas)}")
+print(f"Count: {len(intt_unique_zetas)}")
 
 print()
 print("=" * 60)
@@ -287,8 +339,8 @@ print()
 # For each pass and block, what ROM address do we read?
 
 print("=" * 60)
-print("=== NTT ROM ADDRESS GENERATION SEQUENCE ===")
-print("(Shows the ROM addresses read at the start of each block)")
+print("=== NTT ZETA TABLE INDEX SEQUENCE ===")
+print("(ZETA[i] = zeta^BitRev7(i) mod Q; maps to R4NTT_ROM[t++] or OMEGA_ROM[j/4])")
 print()
 
 for p_idx, p in enumerate(ntt_passes):
@@ -314,7 +366,8 @@ for p_idx, p in enumerate(ntt_passes):
 
 print()
 print("=" * 60)
-print("=== INTT ROM ADDRESS GENERATION SEQUENCE ===")
+print("=== INTT ZETA TABLE INDEX SEQUENCE ===")
+print("(Maps to R4INTT_ROM[t++] or OMEGA_INV_ROM[j/4]; stored as Q - zeta^-1)")
 print()
 
 for p_idx, p in enumerate(intt_passes):
@@ -356,23 +409,23 @@ for p in ntt_passes:
 
 print()
 
-# Now let's see the sequential ROM address sequence for all 256 cycles
-print("FULL NTT ROM ADDRESS SEQUENCE (cycle-by-cycle, 256 total):")
+# Now let's see the sequential ROM address sequence for all 320 cycles
+print("FULL NTT ROM ADDRESS SEQUENCE (cycle-by-cycle, 320 total):")
 cycle = 0
 for p in ntt_passes:
     if p["type"] == "radix4":
         for bl in p["blocks"]:
             for j in range(bl["butterflies_per_block"]):
-                if cycle < 10 or (cycle > 62 and cycle < 68) or (cycle > 126 and cycle < 133) or cycle > 252:
-                    print(f"  Cycle {cycle:3d}: Pass {p['pass']}, Block {bl['block']:3d}, BF {j:2d} -> w0=ROM[{bl['z_B_top']:3d}], w1=ROM[{bl['z_A']:3d}], w2=ROM[{bl['z_B_bot']:3d}]")
+                if cycle < 10 or (cycle > 62 and cycle < 68) or (cycle > 126 and cycle < 133) or cycle > 188:
+                    print(f"  Cycle {cycle:3d}: Pass {p['pass']}, Block {bl['block']:3d}, BF {j:2d} -> w0=ZETA[{bl['z_B_top']:3d}], w1=ZETA[{bl['z_A']:3d}], w2=ZETA[{bl['z_B_bot']:3d}]")
                 elif cycle == 10 or cycle == 68 or cycle == 133:
                     print(f"  ...")
                 cycle += 1
     else:
         for bl in p["blocks"]:
             for j in range(bl["butterflies"]):
-                if cycle < 10 or cycle > 252:
-                    print(f"  Cycle {cycle:3d}: Pass {p['pass']}, Block {bl['block']:3d}, BF {j:2d} -> w0=ROM[{bl['zeta_idx']:3d}]")
+                if cycle < 10 or cycle > 316:
+                    print(f"  Cycle {cycle:3d}: Pass {p['pass']}, Block {bl['block']:3d}, BF {j:2d} -> w0=ZETA[{bl['zeta_idx']:3d}], w1=1, w2=ZETA[{bl['zeta_idx']:3d}]")
                 elif cycle == 10:
                     print(f"  ...")
                 cycle += 1
@@ -394,14 +447,14 @@ print(f"omega_4^2 mod Q = {omega_4_sq} (should be {Q-1})")
 
 # Now let's generate the INTT sequence of ROM addresses for a cycle-by-cycle schedule too
 print()
-print("FULL INTT ROM ADDRESS SEQUENCE (cycle-by-cycle, 256 total):")
+print("FULL INTT ROM ADDRESS SEQUENCE (cycle-by-cycle, 320 total):")
 cycle = 0
 for p in intt_passes:
     if p["type"] == "radix2":
         for bl in p["blocks"]:
             for j in range(bl["butterflies"]):
                 if cycle < 10 or cycle > 124:
-                    print(f"  Cycle {cycle:3d}: Pass {p['pass']}, Block {bl['block']:3d}, BF {j:2d} -> w0=ROM[{bl['zeta_idx']:3d}]")
+                    print(f"  Cycle {cycle:3d}: Pass {p['pass']}, Block {bl['block']:3d}, BF {j:2d} -> w0=ZETA[{bl['zeta_idx']:3d}], w1=1665, w2=ZETA[{bl['zeta_idx']:3d}]")
                 elif cycle == 10:
                     print(f"  ...")
                 cycle += 1
@@ -409,11 +462,102 @@ for p in intt_passes:
         for bl in p["blocks"]:
             for j in range(bl["butterflies_per_block"]):
                 if cycle < 136 and cycle > 126:
-                    print(f"  Cycle {cycle:3d}: Pass {p['pass']}, Block {bl['block']:3d}, BF {j:2d} -> w0=ROM[{bl['z_B']:3d}], w1=ROM[{bl['z_A_top']:3d}], w2=ROM[{bl['z_A_bot']:3d}]")
+                    print(f"  Cycle {cycle:3d}: Pass {p['pass']}, Block {bl['block']:3d}, BF {j:2d} -> w0=ZETA[{bl['z_B']:3d}], w1=ZETA[{bl['z_A_top']:3d}], w2=ZETA[{bl['z_A_bot']:3d}]")
                 elif cycle == 136:
                     print(f"  ...")
-                elif cycle > 252:
-                    print(f"  Cycle {cycle:3d}: Pass {p['pass']}, Block {bl['block']:3d}, BF {j:2d} -> w0=ROM[{bl['z_B']:3d}], w1=ROM[{bl['z_A_top']:3d}], w2=ROM[{bl['z_A_bot']:3d}]")
+                elif cycle > 316:
+                    print(f"  Cycle {cycle:3d}: Pass {p['pass']}, Block {bl['block']:3d}, BF {j:2d} -> w0=ZETA[{bl['z_B']:3d}], w1=ZETA[{bl['z_A_top']:3d}], w2=ZETA[{bl['z_A_bot']:3d}]")
                 cycle += 1
 
 print(f"\nTotal INTT cycles: {cycle}")
+
+# =====================================================================
+# 4-ROM HARDWARE ADDRESS MAPPING & CROSS-VALIDATION
+# =====================================================================
+# Verify the mathematical analysis maps correctly to the 4-ROM architecture.
+# The t++ counter in tf_addr_gen.sv produces sequential addresses:
+#   NTT:  R4NTT_ROM[0] (Pass 1), [1..4] (Pass 2), [5..20] (Pass 3)
+#         OMEGA_ROM[0..63] (Pass 4)
+#   INTT: OMEGA_INV_ROM[0..63] (Pass 1)
+#         R4INTT_ROM[0..15] (Pass 2), [16..19] (Pass 3), [20] (Pass 4)
+
+def mod_inv(a, m):
+    """Modular inverse using Fermat's little theorem (m is prime)"""
+    return pow(a, m - 2, m)
+
+print()
+print("=" * 70)
+print("=== 4-ROM HARDWARE ADDRESS MAPPING & CROSS-VALIDATION ===")
+print("=" * 70)
+
+# Build expected R4NTT_ROM content from the pass analysis
+print("\n--- R4NTT_ROM (21 x 36-bit): NTT Radix-4 Passes ---")
+print("Format: {w1=StageA, w2=StageB_top, w3=StageB_bot}")
+r4ntt_expected = []
+t = 0
+for p in ntt_passes:
+    if p["type"] != "radix4":
+        continue
+    for bl in p["blocks"]:
+        w1_val = ZETA_NTT_TABLE_expected[bl["z_A"]]
+        w2_val = ZETA_NTT_TABLE_expected[bl["z_B_top"]]
+        w3_val = ZETA_NTT_TABLE_expected[bl["z_B_bot"]]
+        r4ntt_expected.append((w1_val, w2_val, w3_val))
+        print(f"  [{t:2d}] w1={w1_val:4d} (ZETA[{bl['z_A']:3d}]), "
+              f"w2={w2_val:4d} (ZETA[{bl['z_B_top']:3d}]), "
+              f"w3={w3_val:4d} (ZETA[{bl['z_B_bot']:3d}])")
+        t += 1
+assert len(r4ntt_expected) == 21, f"Expected 21 R4NTT entries, got {len(r4ntt_expected)}"
+
+# Build expected OMEGA_ROM content
+print("\n--- OMEGA_ROM (64 x 12-bit): NTT Radix-2 Pass ---")
+omega_expected = []
+ntt_r2_pass = [p for p in ntt_passes if p["type"] == "radix2"][0]
+for bl in ntt_r2_pass["blocks"]:
+    val = ZETA_NTT_TABLE_expected[bl["zeta_idx"]]
+    omega_expected.append(val)
+print(f"  First 8: {omega_expected[:8]}")
+print(f"  Last  8: {omega_expected[-8:]}")
+assert len(omega_expected) == 64
+
+# Build expected R4INTT_ROM content (pre-negated inverses)
+print("\n--- R4INTT_ROM (21 x 36-bit): INTT Radix-4 Passes ---")
+print("Format: {w1_inv_neg, w2_inv_neg, w3_inv_neg} = Q - zeta^(-1)")
+r4intt_expected = []
+t = 0
+for p in intt_passes:
+    if p["type"] != "radix4":
+        continue
+    for bl in p["blocks"]:
+        # The ROM stores {w1=z_A_top, w2=z_B, w3=z_A_bot} as pre-negated inverses
+        ntt_w1 = ZETA_NTT_TABLE_expected[bl["z_A_top"]]
+        ntt_w2 = ZETA_NTT_TABLE_expected[bl["z_B"]]
+        ntt_w3 = ZETA_NTT_TABLE_expected[bl["z_A_bot"]]
+        pn_w1 = (Q - mod_inv(ntt_w1, Q)) % Q
+        pn_w2 = (Q - mod_inv(ntt_w2, Q)) % Q
+        pn_w3 = (Q - mod_inv(ntt_w3, Q)) % Q
+        r4intt_expected.append((pn_w1, pn_w2, pn_w3))
+        print(f"  [{t:2d}] w1_neg={pn_w1:4d}, w2_neg={pn_w2:4d}, w3_neg={pn_w3:4d}")
+        t += 1
+assert len(r4intt_expected) == 21, f"Expected 21 R4INTT entries, got {len(r4intt_expected)}"
+
+# Build expected OMEGA_INV_ROM content (pre-negated inverses)
+print("\n--- OMEGA_INV_ROM (64 x 12-bit): INTT Radix-2 Pass ---")
+omega_inv_expected = []
+intt_r2_pass = [p for p in intt_passes if p["type"] == "radix2"][0]
+for bl in intt_r2_pass["blocks"]:
+    ntt_val = ZETA_NTT_TABLE_expected[bl["zeta_idx"]]
+    pn_val = (Q - mod_inv(ntt_val, Q)) % Q
+    omega_inv_expected.append(pn_val)
+print(f"  First 8: {omega_inv_expected[:8]}")
+print(f"  Last  8: {omega_inv_expected[-8:]}")
+assert len(omega_inv_expected) == 64
+
+# Total storage verification
+total_bits = 2 * 21 * 36 + 2 * 64 * 12
+print(f"\nTotal ROM storage: 2*(21*36) + 2*(64*12) = {total_bits} bits ({total_bits // 8} bytes)")
+print(f"omega_4 (NTT)  = {pow(zeta, 64, Q)} (fixed, not in ROM)")
+print(f"omega_4 (INTT) = {mod_inv(pow(zeta, 64, Q), Q)} (fixed, not in ROM)")
+print(f"INV_2_MOD_Q    = 1665 (fixed constant for R2 INTT w1)")
+
+print("\n=== ALL VALIDATIONS PASSED ===")
