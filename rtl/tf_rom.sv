@@ -111,7 +111,7 @@ module tf_rom (
     // Standard forward twiddle factors for NTT Radix-2 pass (stage 7).
     // Addressed by j/4 (Alg 5, line 16).
 
-    localparam logic [11:0] OMEGA_ROM [0:63] = '{
+    localparam logic [11:0] OMEGA_ROM [64] = '{
         12'd1729, 12'd2761, 12'd331,  12'd2298, 12'd2447, 12'd1651, 12'd1435, 12'd1092,
         12'd1919, 12'd2662, 12'd1977, 12'd319,  12'd2094, 12'd2308, 12'd2617, 12'd1212,
         12'd630,  12'd723,  12'd2304, 12'd2549, 12'd56,   12'd952,  12'd2868, 12'd2150,
