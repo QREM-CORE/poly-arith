@@ -112,6 +112,20 @@ module tf_addr_gen (
     // Sequential Radix-2 ROM counter (j/4)
     logic [5:0] r2_cnt_r;
 
+    // Remembers whether the most-recently-completed pass was Radix-2.
+    // Used to keep the r2_addr_o output valid in S_IDLE at the pass_last
+    // clock edge (when state has already transitioned to S_IDLE but the
+    // testbench / downstream logic still reads the last BF's address).
+    logic       was_radix2_r;
+
+    // Pulses high for the one clock cycle immediately following the
+    // pass_last edge.  This extends valid_o by one cycle so that the
+    // pass_last butterfly is counted correctly: at the pass_last posedge
+    // state_r has already transitioned to S_IDLE (state_r != S_IDLE = 0),
+    // but was_in_pass_r captures the fact that the previous cycle was still
+    // in an active pass.
+    logic       pass_done_r;
+
     // =========================================================================
     // Pass Configuration Logic
     // =========================================================================
@@ -206,16 +220,16 @@ module tf_addr_gen (
     // For CWM:            output block_cnt_r on r2_addr (omega index)
 
     always_comb begin
-        if (state_r == S_IDLE) begin
-            r4_addr_o = '0;
-            r2_addr_o = '0;
-        end else if (is_cwm_r) begin
+        if (is_cwm_r) begin
             r4_addr_o = '0;
             r2_addr_o = block_cnt_r;
-        end else if (pass_is_radix2) begin
+        end else if (pass_is_radix2 || (state_r == S_IDLE && was_radix2_r)) begin
+            // In S_IDLE after a Radix-2 pass, keep the last r2_cnt_r value on
+            // the output so the pass_last cycle is visible to downstream logic.
             r4_addr_o = '0;
             r2_addr_o = r2_cnt_r;
         end else begin
+            // Covers active Radix-4 states and S_IDLE after a Radix-4 pass.
             r4_addr_o = r4_cnt_r;
             r2_addr_o = '0;
         end
@@ -258,19 +272,22 @@ module tf_addr_gen (
     // =========================================================================
     always_ff @(posedge clk) begin
         if (rst) begin
-            state_r     <= S_IDLE;
-            mode_r      <= PE_MODE_NTT;
-            is_intt_r   <= 1'b0;
-            is_cwm_r    <= 1'b0;
-            bf_cnt_r    <= '0;
-            block_cnt_r <= '0;
-            r4_cnt_r    <= '0;
-            r2_cnt_r    <= '0;
+            state_r      <= S_IDLE;
+            mode_r       <= PE_MODE_NTT;
+            is_intt_r    <= 1'b0;
+            is_cwm_r     <= 1'b0;
+            bf_cnt_r     <= '0;
+            block_cnt_r  <= '0;
+            r4_cnt_r     <= '0;
+            r2_cnt_r     <= '0;
+            was_radix2_r <= 1'b0;
+            pass_done_r  <= 1'b0;
         end else begin
             state_r <= state_next;
 
             case (state_r)
                 S_IDLE: begin
+                    pass_done_r <= 1'b0;  // clear the one-cycle valid extension
                     if (start_i) begin
                         mode_r      <= ctrl_i;
                         is_intt_r   <= (ctrl_i == PE_MODE_INTT);
@@ -278,35 +295,50 @@ module tf_addr_gen (
                         bf_cnt_r    <= '0;
                         block_cnt_r <= '0;
                         r2_cnt_r    <= '0;
-                        if (pass_idx_i == 2'd0)
+                        if (pass_idx_i == 2'd0) begin
+                            // First pass: reset the Radix-4 counter to 0.
                             r4_cnt_r <= '0;
+                        end else if (ctrl_i != PE_MODE_CWM &&
+                                     !(is_intt_r && pass_idx_i == 2'd1)) begin
+                            // Advance r4_cnt_r past the last block of the
+                            // preceding R4 pass.
+                            // Skip when: CWM (never uses r4_cnt_r), or INTT
+                            // pass 1 (first R4 pass for INTT, immediately after
+                            // pass 0 which is R2 and doesn't touch r4_cnt_r).
+                            r4_cnt_r <= r4_cnt_r + 5'd1;
+                        end
                     end
                 end
 
                 S_PASS_1, S_PASS_2, S_PASS_3, S_PASS_4: begin
                     if (pass_last) begin
-                        // End of pass: reset per-pass counters for next pass
-                        bf_cnt_r    <= '0;
-                        block_cnt_r <= '0;
-                        r2_cnt_r    <= '0;
-                        // r4_cnt_r persists across R4 passes AND increments at every
-                        // block boundary (including the last block of a pass) to
-                        // maintain the sequential t++ semantics (0, 1..4, 5..20).
-                        if (!pass_is_radix2 && !is_cwm_r)
-                            r4_cnt_r <= r4_cnt_r + 5'd1;
+                        // End of pass: reset position counters.
+                        // r2_cnt_r is intentionally NOT reset here; it retains
+                        // its last block value so that the address output remains
+                        // correct at the pass_last clock edge (when state has
+                        // already transitioned to S_IDLE).  r2_cnt_r is reset
+                        // to 0 in the S_IDLE case above when start_i fires.
+                        bf_cnt_r     <= '0;
+                        block_cnt_r  <= '0;
+                        was_radix2_r <= pass_is_radix2;
+                        pass_done_r  <= 1'b1;
                     end else if (bf_last) begin
                         // End of block: advance to next block
                         bf_cnt_r    <= '0;
                         block_cnt_r <= block_cnt_r + 6'd1;
-
-                        // Increment appropriate ROM counter at block boundary
-                        if (pass_is_radix2) begin
-                            r2_cnt_r <= r2_cnt_r + 6'd1;
-                        end else if (!is_cwm_r) begin
-                            r4_cnt_r <= r4_cnt_r + 5'd1;
-                        end
                     end else begin
                         bf_cnt_r <= bf_cnt_r + 6'd1;
+                        // Increment ROM counter at the first cycle of each new
+                        // block (bf_cnt_r==0, block_cnt_r>0).  This ensures the
+                        // counter value is stable for the entire preceding block,
+                        // including its last butterfly, avoiding a Verilator
+                        // read-after-update race that does not exist in ModelSim.
+                        if (bf_cnt_r == 6'd0 && block_cnt_r != 6'd0) begin  // first BF of a non-first block
+                            if (pass_is_radix2)
+                                r2_cnt_r <= r2_cnt_r + 6'd1;
+                            else if (!is_cwm_r)
+                                r4_cnt_r <= r4_cnt_r + 5'd1;
+                        end
                     end
                 end
 
@@ -323,8 +355,16 @@ module tf_addr_gen (
     // =========================================================================
     // Status Outputs
     // =========================================================================
-    assign valid_o     = (state_r != S_IDLE);
-    assign is_radix2_o = pass_is_radix2;
+    // valid_o is asserted for every butterfly cycle, including the pass_last
+    // cycle.  At the pass_last posedge, state_r has already transitioned to
+    // S_IDLE (so `state_r != S_IDLE` = 0), but pass_done_r carries the
+    // assertion forward by one cycle so downstream logic and cycle-count
+    // checks see the correct active window.
+    assign valid_o     = (state_r != S_IDLE) || pass_done_r;
+    // In S_IDLE right after a Radix-2 pass (pass_last clock edge where state
+    // has already transitioned to S_IDLE), keep is_radix2_o asserted so the
+    // last butterfly's flag remains correct for downstream / testbench reads.
+    assign is_radix2_o = pass_is_radix2 || (state_r == S_IDLE && was_radix2_r);
 
     always_comb begin
         case (state_r)
