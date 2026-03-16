@@ -81,7 +81,7 @@ module tf_rom (
     //   Pass 2 (p=2, stages 3&4):  4 entries  [1..4]
     //   Pass 3 (p=1, stages 5&6): 16 entries  [5..20]
 
-    localparam logic [35:0] R4NTT_ROM [0:20] = '{
+    localparam logic [35:0] R4NTT_ROM [21] = '{
         {12'd17,   12'd289,  12'd1584},  // [ 0] Pass 1
         {12'd296,  12'd1062, 12'd1409},  // [ 1] Pass 2
         {12'd1703, 12'd650,  12'd1063},  // [ 2]
