@@ -33,16 +33,8 @@ module unipam_controller_tb;
 
     logic       tf_start_o;
     logic [1:0] pass_idx_o;
-    logic       tf_is_intt_o;
-
     pe_mode_e   pe_ctrl_o;
     logic       pe_valid_o;
-
-    logic       pe0_valid_i;
-    logic       pe1_valid_i;
-    logic       pe2_valid_i;
-    logic       pe2_valid_m_i;
-    logic       pe3_valid_i;
 
     logic       mem_read_en_o;
     logic       mem_write_en_o;
@@ -64,14 +56,8 @@ module unipam_controller_tb;
         .done_o         (done_o),
         .tf_start_o     (tf_start_o),
         .pass_idx_o     (pass_idx_o),
-        .tf_is_intt_o   (tf_is_intt_o),
         .pe_ctrl_o      (pe_ctrl_o),
         .pe_valid_o     (pe_valid_o),
-        .pe0_valid_i    (pe0_valid_i),
-        .pe1_valid_i    (pe1_valid_i),
-        .pe2_valid_i    (pe2_valid_i),
-        .pe2_valid_m_i  (pe2_valid_m_i),
-        .pe3_valid_i    (pe3_valid_i),
         .mem_read_en_o  (mem_read_en_o),
         .mem_write_en_o (mem_write_en_o),
         .rAddr_o        (rAddr_o),
@@ -119,22 +105,13 @@ module unipam_controller_tb;
     // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------
-    task automatic drive_pe_idle;
-        begin
-            pe0_valid_i   = 1'b0;
-            pe1_valid_i   = 1'b0;
-            pe2_valid_i   = 1'b0;
-            pe2_valid_m_i = 1'b0;
-            pe3_valid_i   = 1'b0;
-        end
-    endtask
+    // Removed drive_pe_idle as we emulate the controller based purely on timer
 
     task automatic reset_dut;
         begin
             rst      = 1'b1;
             start_i  = 1'b0;
             op_type_i = PE_MODE_NTT;
-            drive_pe_idle();
 
             repeat (3) @(posedge clk);
             rst = 1'b0;
@@ -201,8 +178,10 @@ module unipam_controller_tb;
             @(posedge clk);
             check(ready_o === 1'b0, "controller leaves IDLE after NTT start");
             check(tf_start_o === 1'b1, "tf_start_o pulses during NTT setup");
-            check(tf_is_intt_o === 1'b0, "tf_is_intt_o is low for NTT");
-            check(pe_ctrl_o == PE_MODE_NTT, "pe_ctrl_o latched to NTT");
+
+            // wait for validity cycle
+            @(posedge clk);
+            check(pe_ctrl_o == PE_MODE_NTT, "pe_ctrl_o latched to NTT (delayed by 1 cycle)");
 
             // monitor a little while
             repeat (20) begin
@@ -214,9 +193,9 @@ module unipam_controller_tb;
                 end
             end
 
-            check(pe_valid_o === 1'b1, "pe_valid_o asserted during NTT run");
             check(mem_read_en_o === 1'b1, "mem_read_en_o asserted during NTT run");
             check(rAddr_o > 0, "rAddr_o increments during NTT run");
+            check(pe_valid_o === 1'b1, "pe_valid_o asserted during NTT run (delayed)");
 
             wait_done(5000, "NTT");
             check(done_o === 1'b1, "done_o asserted for NTT");
@@ -237,8 +216,8 @@ module unipam_controller_tb;
 
             @(posedge clk); // setup
             check(tf_start_o === 1'b1, "tf_start_o pulses during INTT setup");
-            check(tf_is_intt_o === 1'b1, "tf_is_intt_o is high for INTT");
-            check(pe_ctrl_o == PE_MODE_INTT, "pe_ctrl_o latched to INTT");
+            @(posedge clk); // validity
+            check(pe_ctrl_o == PE_MODE_INTT, "pe_ctrl_o latched to INTT (delayed by 1 cycle)");
 
             wait_done(5000, "INTT");
             check(done_o === 1'b1, "done_o asserted for INTT");
@@ -259,6 +238,7 @@ module unipam_controller_tb;
 
             @(posedge clk); // setup
             check(tf_start_o === 1'b0, "tf_start_o stays low for ADDSUB");
+            @(posedge clk); // validity
             check(pe_ctrl_o == PE_MODE_ADDSUB, "pe_ctrl_o latched to ADDSUB");
 
             wait_done(1000, "ADDSUB");
@@ -278,7 +258,7 @@ module unipam_controller_tb;
 
             @(posedge clk); // setup
             check(tf_start_o === 1'b1, "tf_start_o pulses for CWM");
-            check(tf_is_intt_o === 1'b0, "tf_is_intt_o stays low for CWM");
+            @(posedge clk); // validity
             check(pe_ctrl_o == PE_MODE_CWM, "pe_ctrl_o latched to CWM");
 
             wait_done(1000, "CWM");
@@ -305,7 +285,7 @@ module unipam_controller_tb;
 
             check(mem_read_en_o === 1'b1, "read enable asserted in RUN");
 
-            for (cycle_idx = 0; cycle_idx < 12; cycle_idx++) begin
+            for (cycle_idx = 0; cycle_idx < 16; cycle_idx++) begin
                 @(posedge clk);
                 if (mem_write_en_o) begin
                     saw_write = 1'b1;
