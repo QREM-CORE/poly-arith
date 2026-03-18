@@ -36,17 +36,10 @@ module unipam_controller (
     // Interface to twiddle address generator / ROM
     output logic             tf_start_o,
     output logic [1:0]       pass_idx_o,
-    output logic             tf_is_intt_o,
 
     // Interface to PE unit
     output pe_mode_e         pe_ctrl_o,
     output logic             pe_valid_o,
-
-    input  logic             pe0_valid_i,
-    input  logic             pe1_valid_i,
-    input  logic             pe2_valid_i,
-    input  logic             pe2_valid_m_i,
-    input  logic             pe3_valid_i,
 
     // Interface to memory / CMI
     output logic             mem_read_en_o,
@@ -85,7 +78,7 @@ module unipam_controller (
     logic          pass_is_radix2;
     logic [5:0]    blocks_max;
     logic [5:0]    bfs_max;
-    logic [2:0]    pipe_lat;
+    logic [3:0]    pipe_lat;
     logic          pass_uses_tf;
     logic          last_pass;
 
@@ -102,8 +95,7 @@ module unipam_controller (
     // =========================================================================
     // Drain control
     // =========================================================================
-    logic [2:0]    drain_cnt_r, drain_cnt_n;
-    logic          all_pe_idle;
+    logic [3:0]    drain_cnt_r, drain_cnt_n;
     logic          drain_done;
 
     // =========================================================================
@@ -111,8 +103,12 @@ module unipam_controller (
     // =========================================================================
     logic [7:0] issue_addr_r, issue_addr_n;
 
-    logic [7:0] raddr_pipe [0:3];
-    logic       wen_pipe   [0:3];
+    logic [7:0] raddr_pipe [0:8];
+    logic       wen_pipe   [0:8];
+
+    // Delayed PE control and valid signals for memory read latency alignment
+    pe_mode_e   pe_ctrl_d1_r;
+    logic       pe_valid_d1_r;
 
     integer i;
 
@@ -130,7 +126,7 @@ module unipam_controller (
         unique case (op_r)
 
             PE_MODE_NTT: begin
-                pipe_lat     = 3'd4;
+                pipe_lat     = 4'd8;
                 pass_uses_tf = 1'b1;
                 last_pass    = (pass_idx_r == 2'd3);
                 unique case (pass_idx_r)
@@ -143,7 +139,7 @@ module unipam_controller (
             end
 
             PE_MODE_INTT: begin
-                pipe_lat     = 3'd4;
+                pipe_lat     = 4'd8;
                 pass_uses_tf = 1'b1;
                 last_pass    = (pass_idx_r == 2'd3);
                 unique case (pass_idx_r)
@@ -160,7 +156,7 @@ module unipam_controller (
                 pass_is_radix2 = 1'b0;
                 blocks_max     = 6'd63;
                 bfs_max        = 6'd0;
-                pipe_lat       = 3'd4;
+                pipe_lat       = 4'd8;
                 pass_uses_tf   = 1'b1;
                 last_pass      = 1'b1;
             end
@@ -171,7 +167,7 @@ module unipam_controller (
                 pass_is_radix2 = 1'b0;
                 blocks_max     = 6'd63;
                 bfs_max        = 6'd0;
-                pipe_lat       = 3'd3;
+                pipe_lat       = 4'd3;
                 pass_uses_tf   = 1'b0;
                 last_pass      = 1'b1;
             end
@@ -181,7 +177,7 @@ module unipam_controller (
                 pass_is_radix2 = 1'b0;
                 blocks_max     = 6'd63;
                 bfs_max        = 6'd0;
-                pipe_lat       = 3'd1;
+                pipe_lat       = 4'd1;
                 pass_uses_tf   = 1'b0;
                 last_pass      = 1'b1;
             end
@@ -190,7 +186,7 @@ module unipam_controller (
                 pass_is_radix2 = 1'b0;
                 blocks_max     = 6'd0;
                 bfs_max        = 6'd0;
-                pipe_lat       = 3'd1;
+                pipe_lat       = 4'd1;
                 pass_uses_tf   = 1'b0;
                 last_pass      = 1'b1;
             end
@@ -204,14 +200,7 @@ module unipam_controller (
     // =========================================================================
     // PE drain detection
     // =========================================================================
-    assign all_pe_idle =
-        !pe0_valid_i &&
-        !pe1_valid_i &&
-        !pe2_valid_i &&
-        !pe2_valid_m_i &&
-        !pe3_valid_i;
-
-    assign drain_done = all_pe_idle || (drain_cnt_r == 3'd0);
+    assign drain_done = (drain_cnt_r == 4'd0);
 
     // =========================================================================
     // Next-state logic
@@ -257,7 +246,7 @@ module unipam_controller (
 
             S_DRAIN: begin
                 if (!drain_done) begin
-                    drain_cnt_n = drain_cnt_r - 3'd1;
+                    drain_cnt_n = drain_cnt_r - 4'd1;
                 end else begin
                     state_n = S_NEXT_PASS;
                 end
@@ -290,10 +279,13 @@ module unipam_controller (
             pass_idx_r   <= 2'd0;
             block_cnt_r  <= 6'd0;
             bf_cnt_r     <= 6'd0;
-            drain_cnt_r  <= 3'd0;
+            drain_cnt_r  <= 4'd0;
             issue_addr_r <= 8'd0;
 
-            for (i = 0; i < 4; i = i + 1) begin
+            pe_ctrl_d1_r  <= PE_MODE_NTT;
+            pe_valid_d1_r <= 1'b0;
+
+            for (i = 0; i < 9; i = i + 1) begin
                 raddr_pipe[i] <= '0;
                 wen_pipe[i]   <= 1'b0;
             end
@@ -311,7 +303,7 @@ module unipam_controller (
                 pass_idx_r   <= 2'd0;
                 block_cnt_r  <= 6'd0;
                 bf_cnt_r     <= 6'd0;
-                drain_cnt_r  <= 3'd0;
+                drain_cnt_r  <= 4'd0;
                 issue_addr_r <= 8'd0;
             end
 
@@ -321,10 +313,14 @@ module unipam_controller (
             wen_pipe[0]   <= (state_r == S_RUN);
 
             // shift remaining stages
-            for (i = 1; i < 4; i = i + 1) begin
+            for (i = 1; i < 9; i = i + 1) begin
                 raddr_pipe[i] <= raddr_pipe[i-1];
                 wen_pipe[i]   <= wen_pipe[i-1];
             end
+
+            // 1-cycle delay for PE control/valid to match memory read latency
+            pe_ctrl_d1_r  <= op_r;
+            pe_valid_d1_r <= (state_r == S_RUN);
         end
     end
 
@@ -334,12 +330,11 @@ module unipam_controller (
     assign ready_o      = (state_r == S_IDLE);
     assign done_o       = (state_r == S_DONE);
 
-    assign pe_ctrl_o    = op_r;
-    assign pe_valid_o   = (state_r == S_RUN);
+    assign pe_ctrl_o    = pe_ctrl_d1_r;
+    assign pe_valid_o   = pe_valid_d1_r;
 
     assign tf_start_o   = (state_r == S_SETUP) && pass_uses_tf;
     assign pass_idx_o   = pass_idx_r;
-    assign tf_is_intt_o = (op_r == PE_MODE_INTT);
 
     assign mem_read_en_o  = (state_r == S_RUN);
 
@@ -348,17 +343,21 @@ module unipam_controller (
         wAddr_o        = '0;
 
         unique case (pipe_lat)
-            3'd1: begin
+            4'd1: begin
                 mem_write_en_o = wen_pipe[0];
                 wAddr_o        = raddr_pipe[0];
             end
-            3'd3: begin
+            4'd3: begin
                 mem_write_en_o = wen_pipe[2];
                 wAddr_o        = raddr_pipe[2];
             end
+            4'd8: begin
+                mem_write_en_o = wen_pipe[7];
+                wAddr_o        = raddr_pipe[7];
+            end
             default: begin
-                mem_write_en_o = wen_pipe[3];
-                wAddr_o        = raddr_pipe[3];
+                mem_write_en_o = wen_pipe[8];
+                wAddr_o        = raddr_pipe[8];
             end
         endcase
     end
