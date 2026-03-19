@@ -21,7 +21,7 @@ module unipam_top (
 
     // ---- Control Interface (From Main System) ----
     // TODO: start_i will eventually route to the controller. Placeholder for TF testing.
-    input  logic       start_i, 
+    input  logic       start_i,
     input  pe_mode_e   op_type_i
 
     // output logic            ready_o,
@@ -83,6 +83,8 @@ module unipam_top (
     // Sub-Module Instantiations
     // ==========================================
 
+    logic cmi_v;
+    logic cmi_rd_en;
     // ---- Controller ----
     unipam_controller u_controller (
         .clk                (clk),
@@ -97,13 +99,36 @@ module unipam_top (
         .pe_ctrl_o          (),
         .pe_valid_o         (),
         .cmi_ready_i        (1'b1),        // Placeholder for now
-        .cmi_v_o            (),
-        .cmi_rd_en_o        (),
+        .cmi_v_o            (cmi_v),
+        .cmi_rd_en_o        (cmi_rd_en),
         .cmi_poly_id_o      (),
         .cmi_coeff_idx_o    (coeff_idx),
         .cmi_coeff_valid_o  (),
         .block_cnt_o        (),
         .bf_cnt_o           ()
+    );
+
+    cmi cmi (
+        .clk                (clk),
+        .rst                (rst),
+        .coeff_idx_i        (coeff_idx),
+        .coeff_valid_i      (),
+        .poly_id_i          (),
+        .v_i                (),
+        .rd_en_i            (),
+        .wr_en_i            (),
+        .wr_data_i          (),
+        .coeff_o            (),
+        .ready_o            (),
+        .mem_poly_id_o      (),
+        .mem_v_o            (),
+        .mem_rd_en_o        (),
+        .mem_wr_en_o        (),
+        .mem_rd_idx_o       (),
+        .mem_wr_idx_o       (),
+        .mem_wr_data_o      (),
+        .mem_rd_data_i      (),
+        .mem_ready_i        ()
     );
 
     // ---- Twiddle Factor Address Generator ----
